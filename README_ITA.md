@@ -1,6 +1,5 @@
 # Music Manager
-
-🇮🇹 Italiano · [🇬🇧 English](README.md)
+[🇬🇧 English](README.md) · 🇮🇹 Italiano
 
 App per macOS che trasferisce musica, album e playlist dalla libreria dell'app **Musica** a un orologio **Garmin** (Fenix, Forerunner, Edge…) via USB (MTP), e ne gestisce il contenuto.
 
