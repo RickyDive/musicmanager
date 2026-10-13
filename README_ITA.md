@@ -1,4 +1,5 @@
 # Music Manager
+
 [🇬🇧 English](README.md) · 🇮🇹 Italiano
 
 App per macOS che trasferisce musica, album e playlist dalla libreria dell'app **Musica** a un orologio **Garmin** (Fenix, Forerunner, Edge…) via USB (MTP), e ne gestisce il contenuto.
@@ -44,5 +45,11 @@ Per creare il DMG: `Scripts/build-release.sh` (vedi [docs/RELEASING.md](docs/REL
 ## Note sulla privacy
 L'app non invia dati a server propri. Funzione opzionale (spenta di default): il controllo aggiornamenti software chiede ai server Garmin se esiste una nuova versione, inviando il contenuto di `GarminDevice.xml` tramite un servizio non documentato.
 
-## Licenze
-Incorpora **libmtp** e **libusb** (LGPL 2.1+), collegate dinamicamente: vedi [THIRD-PARTY-LICENSES.txt](GarminMusicManager/THIRD-PARTY-LICENSES.txt). Cronologia tecnica: [docs/NOTE-DI-PROGETTO.md](docs/NOTE-DI-PROGETTO.md) (in italiano).
+## Licenza e versione ufficiale
+Music Manager è software libero, distribuito con licenza **GNU GPL v3.0** (file [LICENSE](LICENSE)). Copyright (C) 2026 Riccardo Colaiori (cr.developer).
+- Puoi usare, studiare e modificare il codice; se distribuisci una versione modificata devi pubblicarne il sorgente con la stessa licenza.
+- **Versione ufficiale:** l'unico canale ufficiale è la pagina [Releases](https://github.com/RickyDive/musicmanager/releases) di questo repository. Confronta sempre l'hash del DMG con il file `.sha256` allegato (`shasum -a 256 <file>.dmg`).
+- Le versioni modificate e ridistribuite devono usare un nome diverso e non presentarsi come ufficiali né come approvate dall'autore.
+- Le modifiche si propongono con una Pull Request; le accetta l'autore.
+
+Incorpora **libmtp** e **libusb** (LGPL 2.1+), collegate dinamicamente: vedi [licenses/](licenses/README.md). Cronologia tecnica: [docs/NOTE-DI-PROGETTO.md](docs/NOTE-DI-PROGETTO.md) (in italiano).
