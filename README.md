@@ -14,7 +14,7 @@ A macOS app that transfers music, albums and playlists from the **Music** app li
 
 ## Installation
 Download the DMG from the [Releases](https://github.com/RickyDive/musicmanager/releases) page and follow **[docs/INSTALL.md](docs/INSTALL.md)**.
-The app is not notarized (I don't have an Apple Developer account): on first launch macOS asks for a manual approval in *System Settings ▸ Privacy & Security ▸ Open Anyway*. libmtp and libusb are bundled: **Homebrew is not required**.
+The app is not notarized (I don't have an Apple Developer account): on first launch macOS blocks it. The most reliable way to open it is one Terminal command, `xattr -cr "/Applications/Music Manager.app"` (the *System Settings ▸ Privacy & Security ▸ Open Anyway* route can hang on macOS 27). libmtp and libusb are bundled: **Homebrew is not required**.
 
 ## Main features
 - Browse the Music library (Playlists / Artists / Albums / Songs) and see which tracks can be transferred.
