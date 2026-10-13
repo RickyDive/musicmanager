@@ -1,1 +1,23 @@
-
+name: Bug report
+description: Segnala un problema / Report a problem
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Cosa è successo? / What happened?
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes:
+      label: Passi per riprodurlo / Steps to reproduce
+  - type: input
+    id: watch
+    attributes:
+      label: Modello di orologio / Watch model
+  - type: textarea
+    id: diag
+    attributes:
+      label: Informazioni diagnostiche (Aiuto ▸ Copia informazioni diagnostiche)
+      render: text
+    validations: { required: true }
