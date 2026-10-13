@@ -14,7 +14,7 @@ App per macOS che trasferisce musica, album e playlist dalla libreria dell'app *
 
 ## Installazione
 Scarica il DMG dalla pagina [Releases](https://github.com/RickyDive/musicmanager/releases) e segui **[docs/INSTALL.md](docs/INSTALL.md)**.
-L'app non è notarizzata (non ho un account Apple Developer): al primo avvio macOS chiede un'approvazione manuale in *Impostazioni di Sistema ▸ Privacy e sicurezza ▸ Apri comunque*. Le librerie libmtp e libusb sono incluse: **non serve Homebrew**.
+L'app non è notarizzata (non ho un account Apple Developer): al primo avvio macOS la blocca. Il modo più affidabile per aprirla è un comando da Terminale, `xattr -cr "/Applications/Music Manager.app"` (la strada *Impostazioni di Sistema ▸ Privacy e sicurezza ▸ Apri comunque* può bloccarsi su macOS 27). Le librerie libmtp e libusb sono incluse: **non serve Homebrew**.
 
 ## Funzioni principali
 - Sfoglia la libreria di Musica (Playlist / Artisti / Album / Brani) e segnala i brani trasferibili.
