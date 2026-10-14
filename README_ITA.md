@@ -18,7 +18,7 @@ L'app non è notarizzata (non ho un account Apple Developer): al primo avvio mac
 
 ## Funzioni principali
 - Sfoglia la libreria di Musica (Playlist / Artisti / Album / Brani) e segnala i brani trasferibili.
-- Legge il contenuto della cartella `Music` dell'orologio con la stessa organizzazione, più la vista File.
+- Legge il contenuto della cartella `Music` dell'orologio con la stessa organizzazione (Brani, Album, Artisti, Playlist).
 - Invia brani, album, artisti o playlist intere con struttura `Artista/Album/brano`, verifica l'arrivo di ogni file e non ricopia quelli già presenti.
 - Playlist `.m3u8` ricreata da zero e verificata sul dispositivo dopo l'invio.
 - **Custom Playlist**: componi una playlist da qualsiasi scheda, salvala su file o in Musica, inviala all'orologio.
@@ -38,12 +38,16 @@ Menu **Aiuto ▸ Copia informazioni diagnostiche**, poi apri una [Issue](https:/
 ```bash
 brew install libmtp libusb xcodegen
 xcodegen generate
-open GarminMusicManager.xcodeproj
+open MusicManager.xcodeproj
 ```
 Per creare il DMG: `Scripts/build-release.sh` (vedi [docs/RELEASING.md](docs/RELEASING.md)).
 
 ## Note sulla privacy
 L'app non invia dati a server propri. Funzione opzionale (spenta di default): il controllo aggiornamenti software chiede ai server Garmin se esiste una nuova versione, inviando il contenuto di `GarminDevice.xml` tramite un servizio non documentato.
+
+## Novità della 2.1 Beta 2
+- In lavorazione. Punto principale: analisi del blocco al primo avvio visto su macOS 27 (vedi `docs/TESTING.md`).
+- Testo legale dell'app ed elenco delle librerie incluse aggiornati per la GPL v3.0.
 
 ## Licenza e versione ufficiale
 Music Manager è software libero, distribuito con licenza **GNU GPL v3.0** (file [LICENSE](LICENSE)). Copyright (C) 2026 Riccardo Colaiori (cr.developer).
