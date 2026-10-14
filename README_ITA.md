@@ -7,6 +7,8 @@ App per macOS che trasferisce musica, album e playlist dalla libreria dell'app *
 > **Versione 2.1 Beta 1** — fase di test. Cerco feedback: apri una [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
 > Progetto indipendente, non affiliato né approvato da Garmin o Apple.
 
+> **Ambito:** la musica va in un solo senso, dalla libreria del Mac al dispositivo. L'app non copia mai audio da un dispositivo e non accede alle librerie di altri dispositivi. Vedi [docs/SCOPE.md](docs/SCOPE.md).
+
 ## Requisiti
 - Mac con **Apple Silicon**, **macOS 26** o successivo
 - Orologio Garmin con supporto musica, cavo USB
