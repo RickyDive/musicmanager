@@ -4,7 +4,7 @@
 
 App per macOS che trasferisce musica, album e playlist dalla libreria dell'app **Musica** a un orologio **Garmin** (Fenix, Forerunner, Edge…) via USB (MTP), e ne gestisce il contenuto.
 
-> **Versione 2.1 Beta 1** — fase di test. Cerco feedback: apri una [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
+> **Versione 2.1 Beta 2** — fase di test. Cerco feedback: apri una [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
 > Progetto indipendente, non affiliato né approvato da Garmin o Apple.
 
 > **Ambito:** la musica va in un solo senso, dalla libreria del Mac al dispositivo. L'app non copia mai audio da un dispositivo e non accede alle librerie di altri dispositivi. Vedi [docs/SCOPE.md](docs/SCOPE.md).
@@ -48,8 +48,12 @@ Per creare il DMG: `Scripts/build-release.sh` (vedi [docs/RELEASING.md](docs/REL
 L'app non invia dati a server propri. Funzione opzionale (spenta di default): il controllo aggiornamenti software chiede ai server Garmin se esiste una nuova versione, inviando il contenuto di `GarminDevice.xml` tramite un servizio non documentato.
 
 ## Novità della 2.1 Beta 2
-- In lavorazione. Punto principale: analisi del blocco al primo avvio visto su macOS 27 (vedi `docs/TESTING.md`).
-- Testo legale dell'app ed elenco delle librerie incluse aggiornati per la GPL v3.0.
+- Filtro per genere, «Trova simili», dispositivi Garmin montati come volume (riconoscimento), scelta manuale dell'immagine del prodotto.
+- Elenchi Music: caselle di selezione a sinistra, icona «sul dispositivo» nella colonna della selezione; album multi-disco con intestazioni «Disc n of m»; l'elenco Device mostra numeri di traccia e durate.
+- Pannello Device: pulsanti Pulisci selezione, Elimina e Cancella Tutto; Elimina apre una conferma dettagliata con i brani e le playlist coinvolte, e riscrive quelle playlist senza i brani eliminati (le playlist che restano vuote vengono rimosse dal dispositivo).
+- Impostazioni: aspetto uniforme in tutte le schede, colore di selezione con cursore di tonalità, indicatore di dispositivo collegato, Copia del numero di serie.
+- Tutte le impostazioni sono ora globali (niente più profili per dispositivo).
+- Problema noto in analisi: primo avvio lento o bloccato su macOS 27 (vedi `docs/TESTING.md`).
 
 ## Licenza e versione ufficiale
 Music Manager è software libero, distribuito con licenza **GNU GPL v3.0** (file [LICENSE](LICENSE)). Copyright (C) 2026 Riccardo Colaiori (cr.developer).

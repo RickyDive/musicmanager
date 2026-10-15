@@ -4,7 +4,7 @@
 
 A macOS app that transfers music, albums and playlists from the **Music** app library to a **Garmin** watch (Fenix, Forerunner, Edge…) over USB (MTP), and manages what is on the watch.
 
-> **Version 2.1 Beta 1** — testing phase. Feedback is welcome: open an [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
+> **Version 2.1 Beta 2** — testing phase. Feedback is welcome: open an [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
 > Independent project, not affiliated with or endorsed by Garmin or Apple.
 
 > **Scope:** music flows one way, from your Mac library to the device. The app never copies audio from a device and does not access other devices' libraries. See [docs/SCOPE.md](docs/SCOPE.md).
@@ -48,8 +48,12 @@ To build the DMG: `Scripts/build-release.sh` (see [docs/RELEASING.md](docs/RELEA
 The app sends no data to servers of its own. Optional feature (off by default): the software update check asks Garmin's servers whether a new version exists, sending the contents of `GarminDevice.xml` through an undocumented service.
 
 ## What is new in 2.1 Beta 2
-- Work in progress. Main item: investigating the first-launch hang seen on macOS 27 (see `docs/TESTING.md`).
-- App legal text and bundled-library list updated for the GPL v3.0.
+- Genre filter, "Find similar", Garmin devices mounted as volumes (recognition), manual choice of the product image.
+- Music lists: selection checkboxes on the left, "on device" status icon in the selection column; multi-disc albums with "Disc n of m" headers; the Device list shows track numbers and durations.
+- Device panel: Clear Selection, Delete and Delete All buttons; Delete opens a detailed confirmation listing the songs and the playlists involved, and rewrites those playlists without the deleted songs (playlists left empty are removed from the device).
+- Settings: unified look across all tabs, selection colour with tone slider, connected-device indicator, Copy for the serial number.
+- All settings are now global (no more per-device profiles).
+- Known issue under investigation: slow or blocked first launch on macOS 27 (see `docs/TESTING.md`).
 
 ## License and official version
 Music Manager is free software, released under the **GNU GPL v3.0** ([LICENSE](LICENSE) file). Copyright (C) 2026 Riccardo Colaiori (cr.developer).

@@ -272,3 +272,20 @@ Titolo pannello Apple Music: icona music.note.square.stack.
 - Nuovo menu Aiuto (diagnostica, log, feedback, licenze), messaggio di benvenuto, log in `~/Library/Logs/MusicManager/`.
 - Invariati di proposito: cartella Application Support, `~/Music/GarminMusicManager`, cartella playlist "≡♪ Garmin Music Manager" in Musica.
 - Repository: https://github.com/RickyDive/musicmanager
+
+## 2.1 Beta 2 (build 14) — chiusa
+Copia derivata dalla 2.1 Beta 1 (congelata, build 13). Dettaglio completo nel documento di progetto «v2.1 Beta 2 - stato del progetto».
+- Dispositivi Garmin come volume (fase 1/1b), filtro per genere, Trova simili, scelta manuale dell'immagine prodotto, impostazioni tutte globali, menu ridotti.
+- Selezione: caselle a sinistra, icona «sul dispositivo» nella prima colonna, selezione condivisa tra schede; intestazioni «Disc n of m»; numeri di traccia e durata anche sul Device.
+- Pannello Device: Pulisci selezione / Elimina / Cancella Tutto; finestra di conferma per l'eliminazione con elenco di brani e playlist coinvolte; riscrittura dei file playlist senza i brani eliminati (playlist vuote eliminate); controllo del file playlist più tollerante (righe normalizzate) con motivi nel registro; Copia sul numero di serie.
+- Impostazioni: stile coerente tra le schede, colore di selezione con tonalità, indicatore di collegamento nella tabella Devices.
+- Aperti per la Beta 3: Custom Playlist «Invia» bloccato con spazio insufficiente (da indagare); primo avvio lento/bloccato su macOS 27 (servono log e orario); logica «sul dispositivo» per Album/Artisti; servizi di streaming (Spotify, Amazon Music, YouTube Music): dove salvano i dati sull'orologio.
+
+## 2.1 Beta 3 (build 15)
+Copia di lavoro derivata dalla 2.1 Beta 2 (chiusa, build 14). Versione 2.1 Beta 3, build 15. Da qui in avanti tutte le modifiche vanno in questa cartella.
+- Tema: servizi di streaming (Spotify, Amazon Music, YouTube Music) sull'orologio — capire dove salvano i dati ed evitare di scriverci sopra. Primo passo: azione diagnostica «Salva albero del dispositivo» (menu Aiuto), sola lettura.
+
+- Barra dello spazio (misure fēnix 9 Pro): segmenti System (grigio molto scuro, stima: capacità − libero − altri segmenti, ≈3,45 GiB di sistema/firmware), Data (cartella Garmin senza mappe), Maps, Services (somma di `MediaCacheSize` delle app `audio-content-provider-app` in GarminDevice.xml, senza distinguerli; compare solo se > 0), Music. Verificato: Δ MediaCacheSize di Deezer 27.328.512 B vs Δ spazio non visibile 29.012.808 B.
+- Rimosso il doppione `GarminMusicManager-Bridging-Header.h` (residuo del vecchio nome, identico e non referenziato); resta `MusicManager-Bridging-Header.h`, indicato in project.yml.
+- Barra dello spazio: «xx GB free of yy GB» spostato in alto a sinistra, sopra la barra (la legenda ora ha tutta la larghezza); grigio di System leggermente più chiaro (chiaro 0,33, scuro 0,22); l'etichetta «+ n GB» dei brani da inviare è allineata alla stessa riga.
+- Menu Aiuto: nuova voce «Salva GarminDevice.xml (diagnostica)» (`saveDeviceXML()`): legge il file dal dispositivo in sola lettura, lo salva come GarminDevice-<data>.xml accanto al registro e lo mostra nel Finder.
