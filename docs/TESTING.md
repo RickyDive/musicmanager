@@ -53,3 +53,12 @@ IT: Cambiando lingua in Impostazioni ▸ Generale le voci proprie dell'app (File
 3. «OK» somma i brani scelti alla selezione già fatta e chiude; «Invia a Custom» li manda alla Custom Playlist (stesse regole di «Invia alla Playlist»: duplicati, svuotamento, copertine online per le librerie condivise); «Annulla» chiude senza fare nulla.
 4. Anno e BPM entrano nel punteggio solo se presenti nella libreria. Le copie della libreria salvate prima della 2.1 Beta 2 non li contengono: dopo l'aggiornamento usare File ▸ «Ricarica libreria» (⌘R).
 5. Verifiche: brano senza genere/anno/BPM (nessun errore, barra in scala), album e artista come partenza (titolo corretto), libreria condivisa di un'altra rete, elenco vuoto («Nessun brano simile trovato»).
+
+## Streaming sull'orologio: misura dell'albero del dispositivo (2.1 Beta 3)
+Obiettivo: scoprire dove Spotify / Amazon Music / YouTube Music salvano i contenuti scaricati. Per ogni servizio, uno alla volta:
+1. Collega l'orologio e scegli Aiuto ▸ «Salva albero del dispositivo (diagnostica)»: si crea `DeviceTree-<data>.txt` in `~/Library/Logs/MusicManager/` (si apre nel Finder). Chiamalo «prima».
+2. Sull'orologio (o con l'app del servizio) scarica UNA playlist piccola del servizio, aspetta la fine del download.
+3. Ricollega l'orologio e salva di nuovo l'albero («dopo»).
+4. Invia i due file (o il confronto): le righe nuove mostrano cartelle, estensioni, dimensioni.
+Nota: l'azione è in sola lettura. Non cancellare né copiare nulla sull'orologio durante la prova.
+
