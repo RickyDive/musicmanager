@@ -12,13 +12,13 @@ Theme: understanding streaming services (Spotify, Amazon Music, Deezer…) insta
 - **Storage bar rebuilt** with five segments — *System*, *Data*, *Maps*, *Services*, *Music* — plus the striped "incoming" segment and free space.
   - *Services* adds up the cache size of every installed streaming app, read from `GarminDevice.xml`.
   - *System* is an estimate of what the MTP tree cannot show (OS, firmware, overhead).
-- Mouse-over tooltips on every segment of the bar with its name and size; the legend now shows names only.
+- Instant mouse-over balloon (above the bar) on every segment with its name and size (no system tooltip delay); the legend now shows names only.
 - Dynamic legend: an entry (and its segment) appears only if the category takes at least 1 MB — no maps on the device, no Maps entry.
 - "xx GB free of yy GB" moved above the bar, top left.
 - **Album and artist "on device" arrow**: a green arrow on the header of an album or artist when all its transferable tracks are already on the watch.
 - **Help ▸ Save GarminDevice.xml (diagnostics)** and **Help ▸ Save device tree (diagnostics)**: read-only snapshots to help investigate how a watch uses its storage.
 - **Device File Manager** (opt-in, *Settings ▸ Advanced ▸ Tools*, off by default): sortable Name / Kind / Size / Modified columns, clickable breadcrumb, "Copy path", marks on files created by Music Manager or by recognised apps and streaming services, and **Copy to Mac…**. Read-only on the device.
-- New app icon artwork prepared (coral *Music* card with audio bars → green *Device* card on a grey gradient), to be integrated before the public 2.1.
+- **New app icon**: icon bundle made in Icon Composer by the author (`AppIcon.icon`), to be refined later.
 
 ### Changed
 - The **Send** button is disabled when the selected tracks do not fit in the free space.
@@ -27,6 +27,9 @@ Theme: understanding streaming services (Spotify, Amazon Music, Deezer…) insta
 ### Fixed
 - **Flickering menu bar** while tracks were being prepared for sending (the Edit menu briefly reappeared): menus no longer observe the whole view model.
 - Removed a duplicate bridging header left over from the old project name.
+- **Double-click to play** (tracks, albums, artists, playlists, *Find similar*) stopped working after the selection change; it is detected again.
+- **Shift-click range selection**: click a song (or an album / artist / playlist header or track), then Shift-click a distant one to select (or deselect) everything in between. In Albums, Artists and Playlists the range follows the rows currently visible (open groups only).
+- **Drag-to-select in Songs** works again (press on a song and drag to select or deselect the range, with auto-scroll at the edges).
 
 ### Findings (no code change)
 - Streaming services do **not** use the `Music/` folder; their content is invisible to MTP and tracks the `MediaCacheSize` value in `GarminDevice.xml`. The only interaction with Music Manager is competition for free space.

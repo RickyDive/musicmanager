@@ -176,7 +176,7 @@ Behind **Settings ▸ Advanced ▸ Tools ▸ Device File Manager** (off at first
 - Verify Beta 3 on hardware: menu flicker fix (same recording as before), album/artist "on device" arrows, file manager, tooltips and legend threshold, *Save GarminDevice.xml*.
 - Streaming measurements: Spotify with a real download, a second watch model with music.
 - Real macOS 26 test; confirm the bundled libraries load there.
-- Icon: new artwork (coral + green cards, audio-bars glyph, arrow) to be rebuilt in Icon Composer as four layers (background, Music, Device, arrow).
+- Icon: `AppIcon.icon` is now the author's own Icon Composer bundle (3 layers); to be refined later.
 - Statistics panel (idea, not designed).
 - Decide whether the file manager stays (hidden behind the setting) or is removed for the public release.
 - Public 2.1: updated user guide, final README.
