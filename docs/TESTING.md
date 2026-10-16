@@ -1,64 +1,67 @@
-# Scenari di test – 2.1 Beta 1
-1. Installazione da DMG su un Mac **senza** Homebrew (verifica librerie incorporate).
-2. Primo avvio: aggiramento Gatekeeper, messaggio di benvenuto, permesso Musica.
-3. Rilevamento orologio (e con nessun orologio collegato: ricerca ogni 5 s).
-4. Lettura catalogo del dispositivo (artisti/album/playlist).
-5. Invio di un album e di una playlist; verifica del file m3u8 e del numero di tracce.
-6. Artista con carattere speciale (es. AC/DC) mostrato correttamente.
-7. Dispositivo con un solo storage: il selettore memoria non compare.
-8. Menu Aiuto: copia diagnostica, mostra log, licenze di terze parti.
-9. Lingua italiano / inglese.
+# Test scenarios
 
-Per ogni problema apri una Issue su GitHub con modello "Bug report" e incolla le informazioni diagnostiche.
+Scenarios to run on a build. For every problem, open a GitHub Issue with the *Bug report* template and paste the diagnostic information (**Help ▸ Copy Diagnostic Information**). The log is in `~/Library/Logs/MusicManager/` (**Help ▸ Show Log in Finder**).
 
-## Se l'app non si apre o resta bloccata (macOS 27)
-1. Usa il Metodo A di `docs/INSTALL.md` (`xattr -cr`).
-2. Se serve capire cosa succede: `bash Scripts/diagnose-launch.sh` (crea un file sul Desktop) e allegalo alla Issue.
-3. Prova a disattivare la rete (Wi-Fi spento) e riaprire: se parte, la verifica di macOS aspettava i server Apple.
+## Core scenarios (2.1 Beta 1)
+1. Install from the DMG on a Mac **without** Homebrew (checks the bundled libraries).
+2. First launch: Gatekeeper workaround, welcome message, permission to control Music.
+3. Watch detection (and, with no watch connected, polling every 5 s).
+4. Device catalogue reading (artists / albums / playlists).
+5. Send an album and a playlist; check the `.m3u8` file and the track count.
+6. An artist with a special character (e.g. AC/DC) is shown correctly.
+7. A device with a single storage: the storage selector does not appear.
+8. Help menu: copy diagnostics, show log, third-party licenses.
+9. Italian / English language.
 
-## Dispositivi Garmin come volume (2.1 Beta 2, fase 1: solo riconoscimento)
-Con un dispositivo che si monta come disco (es. Edge) o con i dischi di prova (`Scripts/make-test-volume.sh`):
-1. Edge reale: nel pannello Device compaiono modello, versione software, nome e spazio del volume, la capsula "No music" e il pulsante **Eject**.
-2. `make-test-volume.sh music`: riconosciuto, senza capsula "No music".
-3. `make-test-volume.sh nomusic`: riconosciuto, con la capsula.
-4. `make-test-volume.sh notgarmin` e `badxml`: ignorati (il pannello resta con il messaggio "Collega l'orologio…").
-5. Una chiavetta qualsiasi: ignorata.
-6. Eject: il volume sparisce e lo stato dice che si può scollegare il cavo.
-7. Con un orologio MTP collegato insieme a un Edge: l'orologio funziona come prima.
-8. Aiuto ▸ Copia informazioni diagnostiche: la riga "Garmin volumes" elenca il dispositivo.
+## If the app does not open or hangs (macOS 27)
+1. Use Method A of [INSTALL.md](INSTALL.md) (`xattr -cr`).
+2. To understand what is going on: `bash Scripts/diagnose-launch.sh` (creates a file on the Desktop) and attach it to the Issue.
+3. Try turning the network off (Wi-Fi off) and reopening: if it starts, macOS was waiting for Apple's servers.
 
-## Volume devices — phase 1b (2.1 Beta 2) / Dispositivi a volume — fase 1b
+## Garmin devices mounted as a volume — phase 1, recognition only (2.1 Beta 2)
+With a device that mounts as a disk (e.g. Edge) or with the test disks (`Scripts/make-test-volume.sh`):
+1. Real Edge: the Device panel shows model, software version, volume name and space, the "No music" capsule and an **Eject** button.
+2. `make-test-volume.sh music`: recognised, without the "No music" capsule.
+3. `make-test-volume.sh nomusic`: recognised, with the capsule.
+4. `make-test-volume.sh notgarmin` and `badxml`: ignored (the panel keeps the "Connect your watch…" message).
+5. Any ordinary USB stick: ignored.
+6. Eject: the volume disappears and the status line says the cable can be unplugged.
+7. An MTP watch connected together with an Edge: the watch works as before.
+8. Help ▸ Copy Diagnostic Information: the "Garmin volumes" line lists the device.
 
-EN: With Settings ▸ Advanced "check updates" ON and a Garmin volume device (e.g. Edge) connected: the "Software Updated / Upgrade Available" capsule appears next to the software version; a globe icon opens the maps catalog; the device is remembered, so the launch-time update notice also covers it. With the option OFF nothing is sent to Garmin.
+## Volume devices — phase 1b (2.1 Beta 2)
+With Settings ▸ Advanced "Check for device Software and Maps updates" ON and a Garmin volume device (e.g. Edge) connected: the "Software Updated / Upgrade Available" capsule appears next to the software version; the map icon opens the maps catalogue; the device is remembered if it supports music, so the launch-time update notice also covers it. With the option OFF nothing is sent to Garmin.
 
-IT: Con l'opzione «controlla aggiornamenti» accesa e un dispositivo Garmin a volume collegato (es. Edge): compare la capsula «Software Updated / Upgrade Available», il globo apre il catalogo mappe, e il dispositivo viene memorizzato (l'avviso all'apertura lo include). Con l'opzione spenta non si contatta Garmin.
+## Genre filter (2.1 Beta 2)
+In the Music panel (local and remote libraries) a filter icon next to the search field lists the genres with track counts. Songs, Albums and Artists then show only tracks of that genre (Playlists are not filtered and the icon is disabled there); "Send" acts on what is shown. The first launch re-reads remote library XML files (cache format changed). Check: genre names that differ only in case merge; "No Genre" is last; switching library resets the filter.
 
-## Genre filter (2.1 Beta 2) / Filtro per genere
-EN: In the Apple Music panel (local library and remote libraries) a filter icon next to the search field lists the genres with track counts. Songs, Albums and Artists then show only tracks of that genre (Playlists are not filtered and the icon is disabled there); "Send" acts on what is shown. The first launch re-reads remote library XML files (cache format changed). Check: genre names that differ only in case merge; "No Genre" is last; switching library resets the filter.
+## Choose product image (2.1 Beta 2)
+Right-click the device image in the Device panel ▸ "Choose Product Image…" opens the list of Garmin products (the cached `deviceTypes.json`, refreshed at most every 7 days) with search; one click sets the image, which is remembered for stored devices (music-capable) and kept only until quit for the others. "Use Automatic Image" goes back to the automatic one. Works for MTP and volume devices.
 
-IT: Nel pannello Apple Music (libreria locale e remote) un'icona filtro accanto alla ricerca elenca i generi con il numero di brani. Brani, Album e Artisti mostrano solo i brani di quel genere (le Playlist non si filtrano e lì l'icona è disattivata); «Invia» agisce su ciò che si vede. Al primo avvio gli XML delle librerie remote vengono riletti (formato della cache cambiato). Da verificare: generi che differiscono solo per maiuscole si uniscono; «Senza genere» è in fondo; cambiando libreria il filtro si azzera.
+## Language and menu bar (2.1 Beta 2)
+Changing the language in Settings ▸ General updates at once the app's own menu items (File ▸ Load/Save playlist, About, Help) and window titles. The standard macOS names (File, View, Window…) are translated by the system at launch, so they follow the new language from the next launch (the app stores it as its `AppleLanguages`). Check both directions (English → Italian and back) with the system language set to each.
 
-## Choose product image (2.1 Beta 2) / Scelta manuale dell'immagine
-EN: Right-click the device image in the Device panel ▸ "Choose Product Image…" opens the list of Garmin products (the cached `deviceTypes.json`, refreshed at most every 7 days) with search; one click sets the image, which is remembered for stored devices (music-capable) and kept only until quit for the others. "Use Automatic Image" goes back to the automatic one. Works for MTP and volume devices.
-IT: Click destro sull'immagine del dispositivo ▸ «Scegli l'immagine del prodotto…» apre l'elenco dei prodotti Garmin (`deviceTypes.json` in cache, aggiornato al massimo ogni 7 giorni) con ricerca; un click imposta l'immagine, ricordata per i dispositivi memorizzati (con musica) e tenuta fino alla chiusura per gli altri. «Usa l'immagine automatica» riporta quella automatica. Vale per MTP e volumi.
+## Find similar (2.1 Beta 2)
+1. Right-click a track (Songs tab, or inside an album / artist / playlist), an album or an artist ▸ "Find similar". A "Similar to …" window opens.
+2. The list is sorted by score, with a bar from 0 to the maximum achievable and the percentage next to it. Rows look like the Songs list: click to choose (choices add up), double-click to listen.
+3. "OK" adds the chosen tracks to the current selection and closes; "Send to Custom" sends them to the Custom Playlist (same rules as "Send to Custom": duplicates, clearing, online artwork for remote libraries); "Cancel" closes without doing anything.
+4. Year and BPM count only if present in the library. Library copies saved before 2.1 Beta 2 do not contain them: after updating use File ▸ "Reload Library" (⌘R).
+5. Checks: a track with no genre/year/BPM (no error, bar scaled correctly); album and artist as the starting point (correct title); a remote library; an empty result ("No similar tracks found").
 
-## Language and menu bar (2.1 Beta 2) / Lingua e barra dei menu
-EN: Changing the language in Settings ▸ General updates at once the app's own menu items (File ▸ Load/Save playlist, About, Help) and window titles. The standard macOS names (File, Edit, View, Window, Cut/Copy/Paste…) are translated by the system at launch, so they follow the new language from the next launch (the app stores it as its `AppleLanguages`). Check both directions (English→Italian and back) with the system language set to each.
-IT: Cambiando lingua in Impostazioni ▸ Generale le voci proprie dell'app (File ▸ Carica/Salva playlist, Informazioni, Aiuto) e i titoli delle finestre si aggiornano subito. I nomi standard di macOS (File, Modifica, Vista, Finestra, Taglia/Copia/Incolla…) li traduce il sistema all'avvio, quindi seguono la nuova lingua dal prossimo avvio (l'app la salva come `AppleLanguages`). Provare nei due sensi (inglese→italiano e ritorno) con il sistema in ciascuna lingua.
+## Storage bar and streaming services (2.1 Beta 3)
+1. **Bar segments**: with a watch connected the bar shows System, Data, Maps, Services (only if streaming apps have content) and Music; hovering a segment shows its name and size; the free space is shown above the bar.
+2. **Legend**: an entry appears only if the category takes at least 1 MB. Remove all maps → no Maps entry; a single small playlist in Music → no Music entry; empty streaming caches (128 KB each) → no Services entry.
+3. **Send disabled**: select more music than the free space → the incoming segment turns red and the Send button is disabled with a tooltip; reduce the selection → back to normal.
+4. **Menu flicker**: record the screen while sending a large selection; the menu bar (File / Help, no Edit) must not flicker during "Preparing tracks…".
+5. **"On device" arrows**: on an album or artist header, a green arrow appears only when all its transferable tracks are on the watch. Example: an artist whose album A is fully on the watch and album B is partly on the watch shows the arrow on A only, not on the artist.
+6. **Help ▸ Save GarminDevice.xml (diagnostics)** writes `GarminDevice-<date>.xml` next to the log and reveals it in Finder.
+7. **Device File Manager** (Settings ▸ Advanced ▸ Tools, off by default): turn it on and a folder button appears next to the device title. Check column sorting (Name / Kind / Size / Modified, folders first), the breadcrumb, "Copy path", marks in `Music/` and `Garmin/Apps`, and **Copy to Mac…** with two files of the same name. Nothing is ever written to the device. With the toggle off the button must not appear.
 
+### Measuring where a streaming service stores its data
+Goal: find where Spotify / Amazon Music / YouTube Music / Deezer put downloaded content. One service at a time:
+1. Connect the watch and choose Help ▸ "Save device tree (diagnostics)": this creates `DeviceTree-<date>.txt` in `~/Library/Logs/MusicManager/` (revealed in Finder), and Help ▸ "Save GarminDevice.xml (diagnostics)". Call these "before".
+2. On the watch (or with the service's app) download ONE small playlist of the service and wait for the download to finish.
+3. Reconnect the watch and save both files again ("after").
+4. Send the files (or their comparison): new lines show folders, extensions and sizes; the `MediaCacheSize` of the service in `GarminDevice.xml` shows how much it holds.
 
-## Trova simili (2.1 Beta 2)
-1. Tasto destro su un brano (scheda Brani o dentro un album/artista/playlist), su un album o su un artista → «Trova simili» (icona apple.haptics.and.music.note). Si apre una finestra «Simili a …».
-2. L'elenco è ordinato per punteggio, con una barra da 0 al massimo ottenibile e il valore a fianco. Righe come nell'elenco Brani: click per scegliere (si sommano), doppio click per ascoltare.
-3. «OK» somma i brani scelti alla selezione già fatta e chiude; «Invia a Custom» li manda alla Custom Playlist (stesse regole di «Invia alla Playlist»: duplicati, svuotamento, copertine online per le librerie condivise); «Annulla» chiude senza fare nulla.
-4. Anno e BPM entrano nel punteggio solo se presenti nella libreria. Le copie della libreria salvate prima della 2.1 Beta 2 non li contengono: dopo l'aggiornamento usare File ▸ «Ricarica libreria» (⌘R).
-5. Verifiche: brano senza genere/anno/BPM (nessun errore, barra in scala), album e artista come partenza (titolo corretto), libreria condivisa di un'altra rete, elenco vuoto («Nessun brano simile trovato»).
-
-## Streaming sull'orologio: misura dell'albero del dispositivo (2.1 Beta 3)
-Obiettivo: scoprire dove Spotify / Amazon Music / YouTube Music salvano i contenuti scaricati. Per ogni servizio, uno alla volta:
-1. Collega l'orologio e scegli Aiuto ▸ «Salva albero del dispositivo (diagnostica)»: si crea `DeviceTree-<data>.txt` in `~/Library/Logs/MusicManager/` (si apre nel Finder). Chiamalo «prima».
-2. Sull'orologio (o con l'app del servizio) scarica UNA playlist piccola del servizio, aspetta la fine del download.
-3. Ricollega l'orologio e salva di nuovo l'albero («dopo»).
-4. Invia i due file (o il confronto): le righe nuove mostrano cartelle, estensioni, dimensioni.
-Nota: l'azione è in sola lettura. Non cancellare né copiare nulla sull'orologio durante la prova.
-
+These actions are read-only. Do not delete or copy anything on the watch during the test.
