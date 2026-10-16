@@ -1,31 +1,6 @@
-MUSIC MANAGER – Installazione / Installation
-=============================================
+MUSIC MANAGER – Installation
+============================
 
-ITALIANO
---------
-Requisiti: Mac con Apple Silicon, macOS 26 o successivo, orologio Garmin con cavo USB.
-
-0. Scarica solo da https://github.com/RickyDive/musicmanager/releases e verifica l'hash: `shasum -a 256 MusicManager-<versione>.dmg` deve coincidere con il file `.sha256` della release.
-1. Apri il DMG e trascina "Music Manager" nella cartella Applicazioni.
-2. L'app non è notarizzata (lo sviluppatore non ha un account Apple Developer): macOS non la apre al primo avvio. È normale. Hai due metodi.
-
-   METODO A – Terminale (consigliato, funziona anche su macOS 27 dove il metodo B può bloccarsi)
-   Apri Terminale ed esegui, una riga alla volta:
-       xattr -cr "/Applications/Music Manager.app"
-       open "/Applications/Music Manager.app"
-   Il primo comando toglie il blocco di quarantena applicato da macOS ai file scaricati.
-
-   METODO B – Impostazioni di Sistema
-   Impostazioni di Sistema ▸ Privacy e sicurezza, scorri in basso e clicca "Apri comunque" accanto a "Music Manager". Conferma con la password.
-   Se l'app non si apre e resta bloccata (anche l'Uscita forzata può non bastare): riavvia il Mac e usa il Metodo A prima di riaprirla.
-
-3. Alla prima lettura/invio macOS chiede il permesso di controllare "Musica" (automazione): clicca OK. Senza questo permesso l'app non può leggere la libreria né creare playlist. Se l'hai negato per errore: Impostazioni di Sistema ▸ Privacy e sicurezza ▸ Automazione ▸ Music Manager ▸ attiva "Musica".
-4. Se l'orologio non viene rilevato: chiudi Garmin Express / Android File Transfer / Acquisizione Immagine, ricollega il cavo.
-
-Problemi? Menu Aiuto ▸ "Copia informazioni diagnostiche" e incollale nella segnalazione su GitHub. Se l'app non riesce nemmeno ad aprirsi, indica nella segnalazione la versione di macOS e il metodo usato.
-
-ENGLISH
--------
 Requirements: Apple Silicon Mac, macOS 26 or later, Garmin watch with USB cable.
 
 0. Download only from https://github.com/RickyDive/musicmanager/releases and verify the hash: `shasum -a 256 MusicManager-<version>.dmg` must match the release's `.sha256` file.
