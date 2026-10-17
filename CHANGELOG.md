@@ -33,6 +33,12 @@ Theme: understanding streaming services (Spotify, Amazon Music, Deezer…) insta
 - Lighter grey for the *System* segment; Music/Maps/Services colours unchanged.
 
 ### Fixed
+- Playlists tab: when picking songs one by one completes a playlist, the status bar tells that the playlist will also be sent as a playlist (with its .m3u8 file).
+- Fix Artwork: both covers are larger (as wide as the "Artwork is still present in the Library" note needs, about 200 pt) and the note is shown in full on one line; the gap between the two covers is the normal one.
+- Fix Artwork window keeps a constant height: the strip under the covers is always reserved (one caption line) instead of appearing together with "Artwork updated", and it is no taller than needed.
+- The two "device connected" quit confirmations (Close anyway? / Also disconnect?) now look exactly like the Custom Playlist one: no app icon, same width, compact text and one row of standard-size buttons.
+- Quit confirmation window: removed the empty band above the title (the transparent title bar no longer reserves space).
+- Double-click to play is reliable again: the second click is timed with the mouse event timestamp instead of when the handler runs, so a busy main thread (redraw after the first click) no longer makes it miss the double-click interval.
 - Quit with an unsaved Custom Playlist: the confirmation is now a lighter window like "Clear the playlist?" (no warning icon, name field, three standard-size buttons on one row: Save to File, Quit, Cancel).
 - Send to device window: rows are shorter (vertical padding 8 → 4 pt).
 - "Clear the playlist?" confirmation: no warning triangle; the three buttons (Save to File, Confirm Clear with the trash icon, Cancel) sit on one row at the same size as the main bar buttons.
