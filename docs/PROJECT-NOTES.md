@@ -118,7 +118,7 @@ Display rules: "xx GB free of yy GB" sits above the bar (and shows what will rem
 - Their index/metadata files (`<ID>.DAT/.IDX/.IMT`) live in `Garmin/Apps/DATA` and are owned by the watch: **the app never writes there**.
 - Downloaded content is **not visible through MTP**; the growth of the hidden space matched the growth of `MediaCacheSize` (Deezer: Δ cache 27,328,512 B vs Δ hidden 29,012,808 B).
 - Services do **not** use `Music/`. The risk for Music Manager is therefore *competition for free space*, not path collisions. This is why the Send button is blocked when space is insufficient.
-- Tested: Amazon Music and Deezer (measured), Spotify only with Premium (still to be measured with a real download); YouTube Music was not installable on the fēnix 9 (store reports it incompatible).
+- Tested: Amazon Music and Deezer (measured). Spotify could not be measured (needs Premium) and YouTube Music was not installable on the fēnix 9 (store reports it incompatible). Space measurements are considered **closed**: the Services segment is read from `MediaCacheSize` for every streaming app, regardless of service.
 
 ## 6. How data is read from the device
 
@@ -135,9 +135,9 @@ Display rules: "xx GB free of yy GB" sits above the bar (and shows what will rem
 - Software update check and maps catalogue (`omt.garmin.com/api/maps/universal/update`) — **off by default**; they send the contents of `GarminDevice.xml` (which contains unlock codes). Setting: *Check for device Software and Maps updates*.
 - Maps are informational only: installing or updating them stays with Garmin Express. `Maps.json` per device is the only source; Garmin is queried at first connection or on demand, with proposals to re-check after 90 days or when the maps on the device changed.
 
-## 7. Device File Manager (diagnostic tool)
+## 7. Device File Manager
 
-Behind **Settings ▸ Advanced ▸ Tools ▸ Device File Manager** (off at first launch). A folder button next to the device title opens a sortable table (Name / Kind / Size / Modified, folders first) with a clickable breadcrumb, "Copy path", marks on known files (Music Manager's own folders; app or streaming-service names on `Garmin/Apps` files recognised through the `FileName` stems of the XML) and **Copy to Mac…**. It never writes to the device. A text preview was designed and rejected. It exists to study how streaming services use the device and may be hidden or removed before the public 2.1.
+Behind **Settings ▸ Advanced ▸ Tools ▸ Device File Manager** (off at first launch). A folder button next to the device title opens a sortable table (Name / Kind / Size / Modified, folders first) with a clickable breadcrumb, "Copy path", marks on known files (Music Manager's own folders; app or streaming-service names on `Garmin/Apps` files recognised through the `FileName` stems of the XML) and **Copy to Mac…**. It never writes to the device. A text preview was designed and rejected. It started as a diagnostic tool to study how streaming services use the device and stays in the public release as an opt-in, read-only way to browse the watch without third-party programs.
 
 ## 8. Technical notes worth remembering
 
@@ -167,16 +167,15 @@ Behind **Settings ▸ Advanced ▸ Tools ▸ Device File Manager** (off at first
 - The Garmin/maps breakdown is a recursive scan done at connection or storage change only; Music size updates on every refresh.
 - The "System" segment is an estimate; "Services" is the sum of all streaming apps.
 - Device artwork is best effort and usually absent.
-- Custom Playlist "Send" is not yet blocked when the playlist exceeds the free space (the check covers the selection, not the Custom rows).
 - `.fit` files are not read.
 - Distribution: App Sandbox off; Mac App Store would need USB access re-evaluated.
 
 ## 11. Open items
 
 - Verify Beta 3 on hardware: menu flicker fix (same recording as before), album/artist "on device" arrows, file manager, tooltips and legend threshold, *Save GarminDevice.xml*.
-- Streaming measurements: Spotify with a real download, a second watch model with music.
 - Real macOS 26 test; confirm the bundled libraries load there.
 - Icon: `AppIcon.icon` is now the author's own Icon Composer bundle (3 layers); to be refined later.
 - Statistics panel (idea, not designed).
-- Decide whether the file manager stays (hidden behind the setting) or is removed for the public release.
 - Public 2.1: updated user guide, final README.
+
+**Decisions (2026-10-17):** the Device File Manager **stays** in the public release (read-only on the device, off by default behind Settings ▸ Advanced ▸ Tools): it lets users browse the watch without third-party programs. Streaming space measurements are closed (Spotify not measurable without Premium).
