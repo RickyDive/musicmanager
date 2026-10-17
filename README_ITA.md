@@ -52,6 +52,9 @@ L'app non invia dati a server propri. Funzione opzionale (spenta di default): il
 - «Invia» è disattivato quando la selezione non entra nello spazio libero.
 - Freccia verde «sul dispositivo» sulle intestazioni di album e artisti quando tutti i loro brani trasferibili sono già sull'orologio.
 - Aiuto ▸ Salva GarminDevice.xml / Salva albero del dispositivo (diagnostica in sola lettura); File Manager del dispositivo opzionale (Impostazioni ▸ Avanzate ▸ Strumenti, spento di default).
+- Selezione a intervallo con Maiusc+clic in tutte le schede di Music; trascinamento per selezionare in Brani.
+- Invio di più playlist: la finestra di trasferimento elenca ogni playlist con il suo esito e mostra il totale.
+- Pulsanti piatti (senza vetro), nuova icona dell'app e file delle mappe etichettati con il nome della mappa nel File Manager del dispositivo.
 - Corretto il lampeggio della barra dei menu durante la preparazione dei brani.
 
 Cronologia completa (in inglese): [CHANGELOG.md](CHANGELOG.md).

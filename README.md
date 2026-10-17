@@ -52,6 +52,9 @@ The app sends no data to servers of its own. Optional feature (off by default): 
 - Send is disabled when the selection does not fit in the free space.
 - Green "on device" arrow on album and artist headers when all their transferable tracks are already on the watch.
 - Help ▸ Save GarminDevice.xml / Save device tree (read-only diagnostics); optional Device File Manager (Settings ▸ Advanced ▸ Tools, off by default).
+- Shift-click range selection in all Music tabs; drag-to-select in Songs.
+- Sending several playlists: the transfer window lists every playlist with its outcome and shows the total.
+- Flat buttons (no glass), a new app icon, and map files tagged with the map name in the Device File Manager.
 - Fixed the flickering menu bar while tracks are being prepared.
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
