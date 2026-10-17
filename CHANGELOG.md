@@ -17,10 +17,13 @@ Theme: understanding streaming services (Spotify, Amazon Music, Deezer…) insta
 - "xx GB free of yy GB" moved above the bar, top left.
 - **Album and artist "on device" arrow**: a green arrow on the header of an album or artist when all its transferable tracks are already on the watch.
 - **Help ▸ Save GarminDevice.xml (diagnostics)** and **Help ▸ Save device tree (diagnostics)**: read-only snapshots to help investigate how a watch uses its storage.
-- **Device File Manager** (opt-in, *Settings ▸ Advanced ▸ Tools*, off by default): sortable Name / Kind / Size / Modified columns, clickable breadcrumb, "Copy path", marks on files created by Music Manager or by recognised apps and streaming services, and **Copy to Mac…**. Read-only on the device.
+- **Device File Manager** (opt-in, *Settings ▸ Advanced ▸ Tools*, off by default): sortable Name / Kind / Size / Modified columns, clickable breadcrumb, "Copy path", marks on files created by Music Manager, by recognised apps and streaming services, and on map files (tagged with the map name, e.g. "TopoActive Western Europe"; the files that belong to each map are recorded at the next maps check, in the colour of the Maps segment of the storage bar), and **Copy to Mac…**. Read-only on the device.
 - **New app icon**: icon bundle made in Icon Composer by the author (`AppIcon.icon`), to be refined later.
 
 ### Changed
+- Buttons: *Send to Custom* is now **To Custom**; the arrow of **Send** sits after the label to point towards the device.
+- **Sending several playlists at once**: the transfer window now keeps a list of the playlists, one row each — *Transferring* for the current one, then *Transferred*, *Partially* (some tracks failed) or *Check* (nothing arrived) with copied / already present / error counts. The summary at the bottom shows the whole multi-playlist transfer: the selected-tracks total is known from the start (e.g. 186), while copied / already present / errors grow as playlists finish. The playlist list always shows up to four complete rows (no partial row cut off), then scrolls. The window no longer closes and reopens between playlists.
+- **Flat buttons everywhere**: the Liquid Glass effect is gone from all buttons; they share one flat capsule style (light grey; red-tinted with red text for destructive ones such as *Delete All*, like the system *Confirm*; accent colour for the main action). Panels keep their glass.
 - The **Send** button is disabled when the selected tracks do not fit in the free space.
 - Lighter grey for the *System* segment; Music/Maps/Services colours unchanged.
 
@@ -30,6 +33,10 @@ Theme: understanding streaming services (Spotify, Amazon Music, Deezer…) insta
 - **Double-click to play** (tracks, albums, artists, playlists, *Find similar*) stopped working after the selection change; it is detected again.
 - **Shift-click range selection**: click a song (or an album / artist / playlist header or track), then Shift-click a distant one to select (or deselect) everything in between. In Albums, Artists and Playlists the range follows the rows currently visible (open groups only).
 - **Drag-to-select in Songs** works again (press on a song and drag to select or deselect the range, with auto-scroll at the edges).
+
+### Known issues
+- Map files in the Device File Manager are tagged with the map name only after a **maps check** has recorded the files of each installed map: with a `Maps.json` written by an older build, press the check button next to "Checked …" in the Maps window once. Map data files that Garmin does not attribute to a map show as "Map data".
+- The transfer window's list of playlists uses an estimated row height (four rows shown without scrolling); it may need a small adjustment.
 
 ### Findings (no code change)
 - Streaming services do **not** use the `Music/` folder; their content is invisible to MTP and tracks the `MediaCacheSize` value in `GarminDevice.xml`. The only interaction with Music Manager is competition for free space.
