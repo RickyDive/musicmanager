@@ -2,7 +2,7 @@
 
 1. `brew install libmtp xcodegen` (once).
 2. `Scripts/build-release.sh` creates `build/MusicManager-<version>.dmg` and its `.sha256`.
-3. On GitHub: Releases ▸ Draft a new release ▸ tag (e.g. `v2.1-beta3`), tick "pre-release" for betas, attach the DMG and the `.sha256`, paste the relevant section of `CHANGELOG.md` and the text of `docs/INSTALL.md`.
+3. On GitHub: Releases ▸ Draft a new release ▸ tag (e.g. `v2.1` for the final release, `v2.1-beta3` for a beta), tick "pre-release" only for betas, attach the DMG and the `.sha256`, paste the relevant section of `CHANGELOG.md` and the text of `docs/INSTALL.md`.
 4. `MMFeedbackURL` in `project.yml` is already set to `https://github.com/RickyDive/musicmanager/issues/new/choose`; Help ▸ Send Feedback opens that page.
 5. The repository must also contain the source (LGPL requirement for the bundled libraries; the links to the sources are in `THIRD-PARTY-LICENSES.txt`).
 6. In the release notes state the versions of libmtp and libusb included (`brew list --versions libmtp libusb`) and the sha256 of the DMG.

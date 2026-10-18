@@ -4,7 +4,7 @@
 
 A macOS app that transfers music, albums and playlists from the **Music** app library to a **Garmin** watch (Fenix, Forerunner, Edge…) over USB (MTP), and manages what is on the watch.
 
-> **Version 2.1 Beta 3** — testing phase. Feedback is welcome: open an [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
+> **Version 2.1.** Feedback is welcome: open an [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
 > Independent project, not affiliated with or endorsed by Garmin or Apple.
 
 > **Scope:** music flows one way, from your Mac library to the device. The app never copies audio from a device and does not access other devices' libraries. See [docs/SCOPE.md](docs/SCOPE.md).
@@ -47,25 +47,19 @@ To build the DMG: `Scripts/build-release.sh` (see [docs/RELEASING.md](docs/RELEA
 ## Privacy
 The app sends no data to servers of its own. Optional feature (off by default): the software update check asks Garmin's servers whether a new version exists, sending the contents of `GarminDevice.xml` through an undocumented service.
 
-## What is new in 2.1 Beta 3
-- Storage bar rebuilt: *System*, *Data*, *Maps*, *Services* (streaming apps such as Spotify, Amazon Music, Deezer), *Music*; tooltips with sizes, dynamic legend, free space above the bar.
-- Send is disabled when the selection does not fit in the free space.
-- Green "on device" arrow on album and artist headers when all their transferable tracks are already on the watch.
-- Help ▸ Save GarminDevice.xml / Save device tree (read-only diagnostics); optional Device File Manager (Settings ▸ Advanced ▸ Tools, off by default).
-- Shift-click range selection in all Music tabs; drag-to-select in Songs.
-- Sending several playlists: the transfer window lists every playlist with its outcome and shows the total.
-- Flat buttons (no glass), a new app icon, and map files tagged with the map name in the Device File Manager.
-- Fixed the flickering menu bar while tracks are being prepared.
+## What is new in 2.1
+- Music and device: genre filter and "Find similar"; multi-disc albums with "Disc n of m" headers; selection checkboxes and an "on device" status; green "on device" arrow on albums and artists; Shift-click range selection and drag-to-select.
+- Sending: several playlists at once with a per-playlist transfer window, mixed sends (whole playlists plus loose songs) and a **Cancel** button that stops the send and shows what was and was not sent. Send is disabled when the selection does not fit.
+- Delete: a confirmation sheet lists the songs and the playlists involved; affected playlists are rewritten without them.
+- Storage bar: *System*, *Data*, *Maps*, *Services* (Spotify, Amazon Music, Deezer…), *Music*; free space written inside the bar, a *Storage Capacity* row, and an orange or red warning when the space is almost gone.
+- Player and AirPlay: volume that works with Apple TV, HomePod and amplifiers ("AirPlay as audio", on by default), the in-app slider follows the AirPlay device, and the Apple TV shows cover, artist and title (Now Playing); media keys and Control Center work.
+- Garmin devices mounted as a disk (e.g. Edge): information and Eject. **Experimental, off by default**: music on external drives and SD cards (Settings ▸ Advanced ▸ Tools).
+- Settings ▸ Advanced ▸ Tools: optional Device File Manager (read-only), detailed log switch with *Show Log File*; Help ▸ Save GarminDevice.xml / Save device tree.
+- Faster start: the Music library is read in parallel. All settings are global; flat buttons and a new icon; the app is now called **Music Manager**.
+
+**Known limits:** not tested on macOS 26; not notarized (see [docs/INSTALL.md](docs/INSTALL.md) if the first launch is blocked); no remote control of the app from the Apple TV; very old AirPlay receivers may be refused by macOS itself.
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
-
-## What was new in 2.1 Beta 2
-- Genre filter, "Find similar", Garmin devices mounted as volumes (recognition), manual choice of the product image.
-- Music lists: selection checkboxes on the left, "on device" status icon in the selection column; multi-disc albums with "Disc n of m" headers; the Device list shows track numbers and durations.
-- Device panel: Clear Selection, Delete and Delete All buttons; Delete opens a detailed confirmation listing the songs and the playlists involved, and rewrites those playlists without the deleted songs (playlists left empty are removed from the device).
-- Settings: unified look across all tabs, selection colour with tone slider, connected-device indicator, Copy for the serial number.
-- All settings are now global (no more per-device profiles).
-- Known issue under investigation: slow or blocked first launch on macOS 27 (see `docs/INSTALL.md` and `docs/TESTING.md`).
 
 ## License and official version
 Music Manager is free software, released under the **GNU GPL v3.0** ([LICENSE](LICENSE) file). Copyright (C) 2026 Riccardo Colaiori (cr.developer).

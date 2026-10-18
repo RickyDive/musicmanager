@@ -1,6 +1,6 @@
 # Music Manager — Project Notes
 
-**Current version: 2.1 Beta 3 (build 15)** · macOS 26+ · Apple Silicon only · GPL v3.0 · © 2026 Riccardo Colaiori (cr.developer)
+**Current version: 2.1 (build 16, final)** · macOS 26+ · Apple Silicon only · GPL v3.0 · © 2026 Riccardo Colaiori (cr.developer)
 
 Technical notes for contributors and testers: what the app does, how it is built, how it talks to the watch, which decisions were taken on purpose, and what is still open. For user-facing changes per release see [CHANGELOG.md](../CHANGELOG.md); for installation see [INSTALL.md](INSTALL.md); for test scenarios see [TESTING.md](TESTING.md) (Italian).
 
@@ -29,7 +29,7 @@ A native macOS app (SwiftUI) that moves music from the **Music** app library to 
 | Languages | English (default) and Italian, chosen in Settings |
 | Bundle ID | `com.crdev.MusicManager` |
 
-## 3. Feature overview (2.1 Beta 3)
+## 3. Feature overview (2.1)
 
 ### Music library (left panel)
 - Reads the local Music library with `iTunesLibrary`: tabs **Playlists / Artists / Albums / Songs / Custom**, always alphabetical.
@@ -172,10 +172,24 @@ Behind **Settings ▸ Advanced ▸ Tools ▸ Device File Manager** (off at first
 
 ## 11. Open items
 
-- Verify Beta 3 on hardware: menu flicker fix (same recording as before), album/artist "on device" arrows, file manager, tooltips and legend threshold, *Save GarminDevice.xml*.
-- Real macOS 26 test; confirm the bundled libraries load there.
+- Beta 3 verified on hardware (2026-10-18) and closed; 2.1 released the same day.
+- Real macOS 26 test (never done: no machine available); confirm the bundled libraries load there.
 - Icon: `AppIcon.icon` is now the author's own Icon Composer bundle (3 layers); to be refined later.
 - Statistics panel (idea, not designed).
-- Public 2.1: updated user guide, final README.
+- AirPlay volume with Apple TV: under test (Settings ▸ Advanced ▸ Tools: *AirPlay as audio*, detailed log).
+- Music on volumes (SD cards / mass storage) is experimental and off by default: to be tested with a disk image and a real device.
+- Public 2.1: user guide done (docs/MusicManager-UserGuide-v2.1.docx), final README done. Remaining for the maintainer: DMG, sha256, GitHub release v2.1.
 
 **Decisions (2026-10-17):** the Device File Manager **stays** in the public release (read-only on the device, off by default behind Settings ▸ Advanced ▸ Tools): it lets users browse the watch without third-party programs. Streaming space measurements are closed (Spotify not measurable without Premium).
+
+- AirPlay test (2026-10-18): Apple TV OK with "AirPlay as audio"; Yamaha RX-A2020 (2012) refused by the system ("Unable to connect") on macOS 27 — device limitation, not an app issue.
+
+- Cancel during a transfer with several playlists + loose songs: tested OK on 2026-10-18 (4 complete playlists sent, the fifth not sent, correct totals and warning).
+
+## 12. Candidates for 2.2 (noted 2026-10-18, not for 2.1)
+- **Remote controls from the Apple TV** (play/pause, previous/next, progress bar in Music ▸ Now Playing): an attempt (commands enabled, skip ±15 s, log of every command received) is kept in `docs/2.2-remote-commands-attempt.md`, not in 2.1. The banner with cover, artist and title already works in Beta 3.
+- **Library read**: now parallel (`MusicLibraryService.parallelRead`, kept in 2.1); keep checking thread safety of `ITLibMediaItem`, and consider reading `item.location` lazily instead of for every song at startup.
+- **Music on volumes**: out of experimental once tested with a real SD card / mass-storage device.
+- Free-space block on external SD memories (`isSelectedStorageInternal` heuristic), still awaiting a real device.
+
+**Decided 2026-10-18:** own AirPlay device list — discarded (the system picker is fine); "valore fermo" slider — done in Beta 3; "AirPlay as audio" on by default — kept; parallel library read — kept; update-window capsules — 10 pt (done).
