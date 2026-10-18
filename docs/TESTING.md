@@ -79,3 +79,50 @@ Goal: find where Spotify / Amazon Music / YouTube Music / Deezer put downloaded 
 4. Send the files (or their comparison): new lines show folders, extensions and sizes; the `MediaCacheSize` of the service in `GarminDevice.xml` shows how much it holds.
 
 These actions are read-only. Do not delete or copy anything on the watch during the test.
+
+
+## Music on volumes (2.1 Beta 3, experimental)
+Use `Scripts/make-test-volume.sh music` (or a writable disk image with `Garmin/GarminDevice.xml` and an empty `Music` folder):
+1. Settings ▸ Advanced ▸ Tools: turn on "Music on external drives and SD cards". Back in the Device panel, **Connect** appears next to Eject (only with the switch on and a music-capable volume).
+2. Connect: the panel switches to the normal device view (model, storage bar for the volume, empty catalog); the button becomes Disconnect.
+3. Send a song, a playlist and loose songs from Music: files appear under `Music/Artist/Album/`, the `.m3u8` in `Music`; catalog and storage bar update.
+4. Delete a song, then an album: files and empty folders are removed (permanent); Empty Music folder works.
+5. Disconnect, then Eject: the volume is released. Eject from Finder while connected: the app behaves as if the cable was unplugged.
+6. Switch off: Connect disappears. Titles/artists/albums on the volume come from file and folder names (no MTP metadata); durations and track numbers from the Music library.
+
+
+## Detailed log and AirPlay volume (2.1 Beta 3)
+1. Settings ▸ Advanced ▸ Tools: turn on "Detailed log (diagnostics)"; "Show Log File" selects `~/Library/Logs/MusicManager/MusicManager.log` in Finder. The log shows "Log level: detailed".
+2. AirPlay to the Mac / amplifier / Apple TV: move the volume slider once. The log has `[debug] AirPlay volume:` lines — flags, route devices (class, name, volume, volumeControlType, canSetVolume), result of `setVolume`, and a re-read 0.5 s later. Expected on Apple TV: the re-read tells whether the device applied the level (then the volume works) or not (then the device exposes no absolute volume control).
+3. With the switch off nothing `[debug]` is written. Help ▸ Copy Diagnostic Information shows "Detailed log: on/off".
+
+## AirPlay as audio — Apple TV test (2.1 Beta 3)
+Settings ▸ Advanced ▸ Tools ▸ "AirPlay as audio" (on by default): choose the Apple TV again from the AirPlay button and play a song.
+1. Does the volume slider stay next to the Apple TV in the system AirPlay panel after Play?
+2. Does the in-app volume slider change the Apple TV volume? Is the title shown on the Apple TV the right one?
+3. With the detailed log ON, the `[debug] AirPlay volume:` lines should show `riproduzioneEsterna=false`.
+4. Check HomePod and the Mac too (nothing should get worse); OFF restores the previous behaviour.
+
+## Slider follows the AirPlay device (2.1 Beta 3)
+With "AirPlay as audio" ON and a remote device playing: move the slider inside the system AirPlay panel; when you stop moving it, the in-app slider should jump to the final value within about half a second (it does not follow while you drag). Moving the in-app slider must still control the device without jumps (the app waits 1.5 s after your last move before following the device). Detailed log: `il cursore lo segue` lines show each sync.
+
+## Now Playing info (2.1 Beta 3)
+1. Play a song with cover art, with "AirPlay as audio" ON and an Apple TV selected: the Apple TV banner shows the cover and "Artist / Title" of the song playing (not another one).
+2. Change song, pause, resume, move the progress slider: the banner and the time bar follow.
+3. Control Center ▸ Now Playing shows the same song; the keyboard media keys (play/pause, next, previous) control the app.
+4. With the detailed log ON, each update writes a "[debug] In riproduzione: pubblicato …" line.
+
+## Startup time with Apple Music closed (2.1 Beta 3)
+Switch on the detailed log, quit Music and the app, start the app and note when the "open Music in the background?" question appears. The log shows "Libreria: lettura iniziata/finita in N s" and "Avvio: controllo apertura Musica": the difference between the two timestamps tells whether the wait is the library read or something earlier.
+
+With the detailed log on, the library read also logs how long the conversion of the songs took (they are now read 8 at a time), how many files are on mounted volumes and how many songs have no path.
+
+## Library read in parallel (2.1)
+The library read asks Music's service for every song's file location. If the service is slow (about 40 ms per request, seen on macOS 27) 1000 songs in a row take about a minute. The read now runs in parallel (`MusicLibraryService.parallelRead`; set it to `false` to go back to one at a time). Check: start with Music closed and time the wait; the detailed log shows "Libreria: N brani letti in X s (in parallelo)". Check also that the song count, the playlists and the order are the same as before.
+
+## Storage bar: free space inside the bar (2.1 Beta 3)
+1. The free space is written in the middle of the free part of the bar; the total is in the "Storage Capacity" row under Serial Number (also on a volume seen as a disk).
+2. Select songs: the value updates to what would remain after the send; the striped segment is green while the value fits.
+3. Select enough songs to leave only a little free space: the value disappears and the striped segment turns orange; with more than the free space it turns red.
+4. Maps are purple in the bar and in the legend; check the panel rows do not overlap the bar (one more line than before).
+
