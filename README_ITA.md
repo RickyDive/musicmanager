@@ -26,6 +26,11 @@ L'app non è notarizzata (non ho un account Apple Developer): al primo avvio mac
 - **Custom Playlist**: componi una playlist da qualsiasi scheda, salvala su file o in Musica, inviala all'orologio.
 - Barra grafica dello spazio (System, Data, Maps, Services, Music, selezione in arrivo) con suggerimenti; lo spazio dei servizi di streaming viene riconosciuto, mai modificato.
 - Copertine, mini player con AirPlay, librerie remote (SMB), eliminazione e pulizia della cartella Music.
+- **Menu del tasto destro** per ogni contesto: brani (menu completo: Send to Custom / Device, Artwork Online Fix, Vai ad Album / Artista, Trova simili, Mostra in Playlist), intestazioni di playlist / album / artista (due righe Send con nome e numero di brani) e tutta l'area del mini player. I sottotitoli indicano quanti brani sono realmente inviabili, es. «2 album / 37 brani (6 trasferibili)».
+- Mini player: pulsante muto che ricorda il volume precedente.
+- Tutte le finestre (Fix Artwork, report di trasferimento, Trova simili, eliminazione, riepilogo invio…) sono pannelli di vetro centrati.
+- Campanella notifiche: il pallino mostra il messaggio non letto più grave (rosso = errore, arancione = avviso).
+- Librerie di rete (SMB): montate all'avvio (3 tentativi, solo se il server risponde), con il vero nome host del server salvato, così funzionano anche quando il nome della condivisione non si risolve; un server irraggiungibile mostra un avviso arancione (offline) o rosso (server assente) invece di una finestra di sistema.
 - Interfaccia in italiano e inglese.
 
 ## Segnalare un problema
@@ -47,19 +52,17 @@ Per creare il DMG: `Scripts/build-release.sh` (vedi [docs/RELEASING.md](docs/REL
 ## Note sulla privacy
 L'app non invia dati a server propri. Funzione opzionale (spenta di default): il controllo aggiornamenti software chiede ai server Garmin se esiste una nuova versione, inviando il contenuto di `GarminDevice.xml` tramite un servizio non documentato.
 
-## Novità della 2.1
-- Music e dispositivo: filtro per genere e «Trova simili»; album multi-disco con intestazioni «Disc n of m»; caselle di selezione e stato «sul dispositivo»; freccia verde «sul dispositivo» su album e artisti; selezione a intervallo con Maiusc+clic e trascinamento per selezionare.
-- Invio: più playlist insieme con una finestra di trasferimento per playlist, invii misti (playlist intere più brani singoli) e pulsante **Annulla** che ferma l'invio e mostra cosa è stato inviato e cosa no. «Invia» è disattivato quando la selezione non entra.
-- Eliminazione: una finestra di conferma elenca i brani e le playlist coinvolte; le playlist interessate vengono riscritte senza di essi.
-- Barra dello spazio: *System*, *Data*, *Maps*, *Services* (Spotify, Amazon Music, Deezer…), *Music*; spazio libero scritto dentro la barra, riga *Storage Capacity* e avviso arancione o rosso quando lo spazio sta finendo.
-- Player e AirPlay: volume che funziona con Apple TV, HomePod e amplificatori («AirPlay come audio», attivo di default), il cursore dell'app segue il dispositivo AirPlay e l'Apple TV mostra copertina, artista e titolo (In riproduzione); funzionano i tasti multimediali e il Centro di Controllo.
-- Dispositivi Garmin montati come disco (es. Edge): informazioni ed Espelli. **Sperimentale, spento di default**: musica su dischi esterni e schede SD (Impostazioni ▸ Avanzate ▸ Strumenti).
-- Impostazioni ▸ Avanzate ▸ Strumenti: File Manager del dispositivo opzionale (sola lettura), interruttore del registro dettagliato con *Mostra il file di registro*; Aiuto ▸ Salva GarminDevice.xml / Salva albero del dispositivo.
-- Avvio più rapido: la libreria di Music viene letta in parallelo. Tutte le impostazioni sono globali; pulsanti piatti e nuova icona; l'app si chiama ora **Music Manager**.
+## Novità della 2.2
+- **Librerie su unità esterna** (Impostazioni ▸ Avanzate, fino a 3): una cartella di file audio su una chiavetta USB, un disco o una cartella di rete diventa una libreria, con un indice proprio creato dai tag. Restano solo i formati che il tuo Garmin accetta; FLAC, WAV, AIFF e ALAC sono mostrati ma non inviabili. Riscansione incrementale, copertine dai file, pulsante **Espelli**.
+- **Librerie remote (di rete)**: montaggio più affidabile (si controlla prima il server, niente lunghe attese né errori di sistema), interruttore **Monta automaticamente** e pallino di stato a tre stati, avanzamento in tempo reale della prima lettura dell'XML, avviso quando l'XML sul server è cambiato, riproduzione con caricamento e riconoscimento della connessione lenta, smontaggio dei volumi montati dall'app alla chiusura.
+- **Musica e copertine**: una domanda prima di aggiungere brani a Musica (Impostazioni ▸ Generale), pannello delle copertine online ridisegnato, avvio più veloce (percorsi salvati, libreria riletta al ritorno nell'app), opzione *Thread per leggere la libreria*, duplicati elencati con una casella per ogni brano.
+- **Interfaccia**: barre di vetro fluttuanti, barra del titolo in stile Xcode con capsula di attività, un solo aggiorna e una sola ricerca (⌘F), campanella delle notifiche, finestre di vetro centrate, modalità compatta per le risoluzioni basse, menu del tasto destro e mini player più ricchi, un solo evidenziatore arrotondato per la selezione, digitazione negli elenchi con il testo nell'indicatore della lettera, tre tabelle uguali nelle Impostazioni, testi italiani rivisti e nuova icona.
 
-**Limiti noti:** non provata su macOS 26; non notarizzata (vedi [docs/INSTALL.md](docs/INSTALL.md) se il primo avvio è bloccato); nessun controllo dell'app dall'Apple TV; ricevitori AirPlay molto vecchi possono essere rifiutati da macOS stesso.
+**Da sapere:** con le librerie remote la prima lettura è lenta e le aperture successive sono immediate; lì la digitazione negli elenchi posiziona solo sulla prima lettera, quindi usa la ricerca con la lente. Con due condivisioni dallo stesso nome il Finder può lasciare una voce «fantasma» vuota dopo lo smontaggio (`killall Finder` o un riavvio la elimina). Il controllo degli aggiornamenti software segue la distribuzione a gruppi di Garmin, come Garmin Express.
 
-Cronologia completa (in inglese): [CHANGELOG.md](CHANGELOG.md).
+**Limiti noti:** non provata su macOS 26 (sviluppata e provata su macOS 27); non notarizzata (vedi [docs/INSTALL.md](docs/INSTALL.md) se il primo avvio è bloccato); i formati lossless non vengono convertiti né inviati; le playlist trovate nella cartella di un'unità non si importano; nessun controllo dell'app dall'Apple TV; ricevitori AirPlay molto vecchi possono essere rifiutati da macOS stesso.
+
+Cronologia completa (in inglese): [CHANGELOG.md](CHANGELOG.md). Testo della release: [docs/RELEASE-NOTES-2.2.md](docs/RELEASE-NOTES-2.2.md).
 
 ## Licenza e versione ufficiale
 Music Manager è software libero, distribuito con licenza **GNU GPL v3.0** (file [LICENSE](LICENSE)). Copyright (C) 2026 Riccardo Colaiori (cr.developer).

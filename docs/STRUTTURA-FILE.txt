@@ -1,0 +1,269 @@
+MUSIC MANAGER 2.2 (build 19) - MAPPA DEI FILE DEL PROGETTO
+======================================================================
+Guida per orientarsi in Xcode: cosa contiene ogni file e dove cercare.
+I numeri di riga sono indicativi (cambiano a ogni modifica): meglio cercare
+la scritta "// MARK: ..." indicata, visibile anche nel menu a tendina in alto
+dell'editor di Xcode (la barra "breadcrumb", scorciatoia Ctrl+6).
+
+Idea generale dell'architettura
+-------------------------------
+- Le VISTE (SwiftUI) disegnano l'interfaccia: ContentView, CatalogBrowser,
+  MiniPlayerView, SettingsView, FixArtworkView, TransferReportView...
+- AppViewModel e' il "cervello": tiene lo stato (@Published) e contiene la
+  logica di quasi tutte le azioni (invio, cancellazione, Custom Playlist...).
+- I SERVIZI parlano con il mondo esterno: MTPService (orologio via USB),
+  MusicLibraryService (libreria Musica / XML / unita' esterne),
+  AppleMusicScripting (app Musica via AppleScript), PlayerService (audio).
+- AppSettings contiene le impostazioni salvate; Localization contiene tutti i
+  testi (italiano e inglese).
+
+CARTELLA MusicManager/ (il codice dell'app)
+===========================================
+
+--- Avvio, menu e finestre -------------------------------------------------
+
+MusicManagerApp.swift (~450 righe)
+  Punto d'ingresso dell'app (@main). Contiene:
+  - MusicManagerApp: la scena/finestra principale e le impostazioni di base
+    (dimensione minima della finestra, .windowResizability).
+  - MenuState, FileMenuCommands, AboutCommands, HelpMenuCommands: i menu
+    (File: carica/salva playlist; Aiuto: diagnostica, log...).
+  - AboutView: la finestra "Informazioni su".
+  - FitWindowToVisibleScreen, DisableWindowZoomAndMinimize: adattano la
+    finestra allo schermo all'avvio.
+  - AppLog: il registro (log) dell'app; Diagnostics: testo di "Copia
+    informazioni di diagnostica".
+
+AppDelegate.swift (~430 righe)
+  Gestione della chiusura dell'app (domande all'uscita) e infrastruttura dei
+  PANNELLI DI VETRO: GlassPanel, GlassModalPresenter (apre qualsiasi
+  finestra di dialogo in vetro, centrata e non spostabile),
+  DialogPresenter / QuitDialogView / QuitDialogModel (le domande a pulsanti
+  generiche usate da molte parti dell'app).
+
+GlassBars.swift (~280 righe)
+  Elementi grafici condivisi: le capsule di vetro in alto e in basso di ogni
+  pannello (GlassBarsModifier), GlassSearchField, FlatButtonStyle (stile dei
+  pulsanti piatti, anche .flatRoomy), TwoLineHint, SheetFrame (dimensione
+  dei dialoghi: 90% dell'altezza della finestra), MainWindowMetrics (misure
+  della finestra principale) e le "variabili d'ambiente" (compactPane,
+  inGlassPanel, windowHeight).
+
+--- Interfaccia principale -------------------------------------------------
+
+ContentView.swift (~3280 righe)  <-- schermata principale
+  - ContentView: la finestra con i due pannelli (Musica a sinistra,
+    Dispositivo a destra), barra del titolo, toolbar e campanella.
+    Riga 84 circa: minWidth/minHeight della finestra (oggi 1024 x 530).
+  - "MARK: Pannello Apple Music" e "MARK: Pannello dispositivo": le due
+    meta' della finestra, con le barre di vetro in basso (pulsanti Send,
+    To Custom, Delete...).
+  - "MARK: Centro notifiche": capsula di attivita' e campanella.
+  - Dialoghi e pannelli: ClearPlaylistConfirmView, DeviceNicknamePromptView,
+    DuplicateTracksView (duplicati con casella per brano),
+    DevicePlaylistImportView, UpdateCapsuleView/DeviceUpdateSheet
+    (aggiornamenti software), MapsSheet (mappe), DroppedFilesView (file
+    trascinati dal Finder), DeviceImagePickerSheet (immagine del prodotto),
+    DeviceDeleteConfirmView (conferma eliminazione), DeviceFileBrowserView
+    (esplora file del dispositivo).
+  - CompactAwareLabelStyle: stile icona+testo dei pulsanti (qui c'e' la
+    costante iconTextSpacing = distanza icona-testo) e LoadSaveSplitButton
+    (pulsante doppio Load | Save della Custom Playlist).
+  - SimpleGlassPanels: apre i pannelli di vetro (svuota playlist, nickname,
+    Fix Artwork, report di trasferimento, mappe, aggiornamenti...).
+
+CatalogBrowser.swift (~2830 righe)  <-- le liste Playlist/Artisti/Album/Brani
+  Una sola vista generica (CatalogBrowser) usata sia per la libreria Musica
+  sia per il dispositivo.
+  - Schede, ricerca, filtro per genere ("MARK: Filtro per genere").
+  - Righe, selezione a intervallo con Maiusc, trascinamento, menu del tasto
+    destro (contextMenuItems: menu dei brani e delle intestazioni).
+  - Scheda Custom Playlist ("MARK: Scheda Custom Playlist") e relativi
+    modelli (CustomPlaylistEntry, CustomPlaylistConfig, ordinamento).
+  - Indicatori: ArtworkOriginIcon (origine copertina), PlayingIndicatorView,
+    lettera accanto al cursore di scorrimento, ricerca a digitazione.
+  - SimilarTracksSheet: la finestra "Trova simili" (con To Custom / To Device).
+  - ExternalRevealRequest: "Vai a album/artista", "Mostra in playlist".
+
+Catalog.swift (~275 righe)
+  Concetti comuni a Musica e dispositivo: CatalogCategory (le 4 schede + Custom),
+  protocollo CatalogTrack (cosa deve avere un brano per comparire nelle liste),
+  TrackGroup (raggruppamenti per album/artista/playlist), PlaybackSource,
+  ArtworkOrigin (da dove viene la copertina).
+
+MiniPlayerView.swift (~550 righe)
+  Il mini player: copertina, titolo, barra di avanzamento, controlli, volume
+  con muto, pulsante AirPlay (AirPlayButton) e AudioRouteMonitor; menu del
+  tasto destro su tutta l'area.
+
+StorageBarView.swift (~350 righe)
+  La barra della memoria del dispositivo (System, Data, Maps, Services,
+  Music, selezione in arrivo) con tooltip e avvisi di spazio.
+
+--- Finestre e pannelli specifici ------------------------------------------
+
+DeviceExportView.swift (~160 righe)
+  Riepilogo di invio ("Send to device") mostrato PRIMA di scrivere
+  sull'orologio, con l'origine delle copertine; DeletionProgressView
+  (progresso di eliminazione).
+
+TransferReportView.swift (~360 righe)
+  Il report di trasferimento in tempo reale (progresso, Annulla con conferma,
+  Chiudi a fine lavoro). Modelli: TransferReport, TransferItemResult,
+  TransferPlaylistSummary.
+
+FixArtworkView.swift (~610 righe)
+  Finestra "Fix Artwork": FixArtworkSession (stato: un brano alla volta,
+  ricerca online, "usa la stessa copertina per gli altri brani dell'album")
+  e FixArtworkView (la grafica del pannello).
+
+SettingsView.swift (~1500 righe)
+  Impostazioni (Generale, Aspetto, Artwork, Avanzate, dispositivi, librerie
+  remote e su unita' esterna). In fondo: anteprima dell'aspetto
+  (AppearanceMock), selettori colore, DriveSetupSheet (aggiunta di una
+  libreria su unita' esterna).
+
+--- Cervello e dati --------------------------------------------------------
+
+AppViewModel.swift (~5280 righe)  <-- il file piu' grande: stato e logica
+  Cerca queste sezioni "// MARK:":
+  - Dispositivo (riga ~205), Controllo aggiornamenti (~247)
+  - Libreria Apple Music (~419 e ~1276), Trova simili (~443)
+  - Stato (~747): le proprieta' @Published che le viste osservano
+  - Mini player (~811), Rete corrente (~850): librerie "locali" e "remote"
+  - Montaggio delle librerie di rete all'avvio (~907: mountRemoteLibraries
+    AtLaunch, tentativi, controllo che il server risponda)
+  - Librerie remote XML (~1362), Librerie su Unita' esterna (~1441)
+  - File trascinati dal Finder (~2114)
+  - Preparazione in locale ("TEMP") e invio al dispositivo (~2464)
+  - Dispositivo (~2872): connessione MTP, lettura, eliminazione
+  - Dispositivi Garmin come volume (~3149), immagine del prodotto (~3350)
+  - Azioni sulla selezione del dispositivo (~3670)
+  - Custom Playlist (~4284), Domanda prima di aggiungere a Music (~4690),
+    salvataggio in Music (saveCustomPlaylistToAppleMusic ~4800),
+    Custom Playlist su file M3U8 (~4850), uscita con playlist compilata
+  - Proposta di ricerca copertine per librerie condivise (~5083)
+  - In cima: tipi di supporto (DeviceExportPlan, NoticeKind/NoticeFormat/
+    NoticeEntry = notifiche e campanella).
+
+AppSettings.swift (~1100 righe)
+  Impostazioni persistenti (AppSettings, salvate in UserDefaults) e tipi
+  collegati: RemoteLibraryConfig (libreria remota: nickname, percorso,
+  indirizzo di rete, serverHost), DriveLibraryConfig, LibraryReachability
+  (controlla se il server risponde), NetworkAddress (risoluzione indirizzi
+  smb://), FileBookmark, NetworkIdentity (rete corrente).
+
+Localization.swift (~2290 righe)
+  Tutti i testi in italiano e inglese: un dizionario "chiave": [.it: ..., .en: ...].
+  Nel codice si usa t("chiave"). Per correggere un testo si cerca la chiave
+  (es. "button_save_short") e si cambia la riga .it o .en. Non si cambiano
+  le chiavi. In cima: AppLanguage e LocalizationManager.
+
+--- Libreria musicale e servizi --------------------------------------------
+
+MusicLibraryService.swift (~1040 righe)
+  Lettura della libreria Musica (LocalTrack, PlaylistInfo, LibraryCatalog,
+  MusicLibraryService), delle librerie remote da XML (ExternalParsed,
+  RemoteLibraryManager) e delle librerie su unita' esterna: DriveIndex,
+  DriveLibraryService (scansione cartella, tag, formati ammessi, lossless
+  bloccati), DriveLibraryManager.
+
+AppleMusicScripting.swift (~295 righe)
+  Dialogo con l'app Musica via AppleScript: crea/aggiorna playlist, aggiunge
+  file alla libreria (addFileToLibrary), legge le copertine.
+
+MTPService.swift (~830 righe)
+  Comunicazione USB con l'orologio (libmtp): MTPService (actor), modelli
+  DeviceTrack, DevicePlaylist, DeviceCatalog, MTPStorage, MTPError.
+
+DeviceImageService.swift (~1200 righe)
+  Tutto cio' che riguarda il dispositivo oltre ai brani: immagine del
+  prodotto, GarminDevice.xml (DeviceXMLStore), controllo aggiornamenti
+  software (GarminUpdateService), mappe (GarminMapsService), cartelle
+  dell'app (AppFolders), dispositivi Garmin montati come disco
+  (VolumeDeviceScanner).
+
+PlayerService.swift (~590 righe)
+  Motore audio (AVPlayer): riproduzione, tempo, volume di sistema
+  (SystemOutputVolume) e volume dei dispositivi AirPlay (AirPlayRouteVolume).
+
+USBRemovalWatcher.swift (~100 righe)
+  Si accorge quando l'orologio viene scollegato (notifica IOKit).
+
+--- Copertine --------------------------------------------------------------
+
+ArtworkCache.swift (~160 righe)
+  Archivio su disco delle copertine confermate in Fix Artwork (indice JSON +
+  JPEG in Application Support); notifica didClearNotification allo svuotamento.
+
+ArtworkLookupService.swift (~180 righe)
+  Ricerca online di una copertina (servizio di ricerca iTunes).
+
+ArtworkExporter.swift (~120 righe)
+  Prepara il file da inviare con la copertina scritta dentro.
+
+MP4ArtworkWriter.swift (~205 righe)
+  Scrive la copertina direttamente nel contenitore M4A/AAC senza
+  ricodificare l'audio.
+
+--- Altri file -------------------------------------------------------------
+
+SharedMusicLibrary.swift (5 righe)
+  File vuoto, non piu' usato (rimosso l'accesso DAAP dalla 1.5.2). Resta solo
+  per non rompere il riferimento nel progetto Xcode.
+
+MusicManager-Bridging-Header.h
+  Ponte con le librerie C (libmtp / libusb).
+
+THIRD-PARTY-LICENSES.txt
+  Licenze delle librerie incluse.
+
+Assets.xcassets / AppIcon.icon
+  Risorse grafiche e icona dell'app.
+
+FUORI DALLA CARTELLA DEL CODICE
+===============================
+project.yml          Definizione del progetto per XcodeGen (nome, versione,
+                     librerie, opzioni di build, firma). Da qui si genera
+                     MusicManager.xcodeproj con "xcodegen generate".
+CHANGELOG.md         Storia delle modifiche, voce piu' recente in alto.
+docs/RELEASE-NOTES-2.2.md  Note di rilascio della 2.2 (EN/IT), testo per GitHub.
+README.md / README_ITA.md       Presentazione del progetto (inglese/italiano).
+LICENSE              GPL v3.
+.github/ISSUE_TEMPLATE/bug_report.yml   Modulo di segnalazione dei bug su GitHub.
+licenses/            Licenza LGPL e note per le librerie incluse.
+
+Scripts/
+  build-release.sh     Crea il DMG di rilascio e il file .sha256.
+  bundle-libs.sh       Copia libmtp/libusb dentro l'app.
+  verify-bundle.sh     Controlla che l'app impacchettata sia completa.
+  diagnose-launch.sh   Diagnosi dei problemi di avvio.
+  make-test-volume.sh  Crea un volume di prova.
+
+docs/
+  PROJECT-NOTES.md     Note tecniche di progetto (decisioni, limiti, idee).
+  SCOPE.md             Ambito del progetto (musica solo dal Mac al dispositivo).
+  TESTING.md           Scenari di prova.
+  INSTALL.md           Installazione e apertura al primo avvio.
+  RELEASING.md         Come pubblicare una release.
+  RELEASE-NOTES-2.1.md Note di rilascio della 2.1.
+  MusicManager-UserGuide-v2.1.docx   Guida utente 2.1.
+  2.2-remote-commands-attempt.md     Tentativo (non testato) di comandi
+                       remoti da Apple TV.
+  STRUTTURA-FILE.txt   Questo file.
+
+Dove cercare, in pratica
+========================
+- Un testo da correggere              -> Localization.swift (cerca il testo)
+- Dimensione minima della finestra    -> ContentView.swift, riga ~84
+- Spazio icona-testo dei pulsanti     -> ContentView.swift, CompactAwareLabelStyle
+- Menu del tasto destro               -> CatalogBrowser.swift, contextMenuItems
+- Cosa fa il pulsante Send            -> AppViewModel.swift, sezioni "Preparazione
+                                         in locale" e "Dispositivo"
+- Salvataggio in Music                -> AppViewModel.swift, saveCustomPlaylistToAppleMusic
+                                         e AppleMusicScripting.swift
+- Montaggio librerie di rete          -> AppViewModel.swift (~907) e AppSettings.swift
+                                         (LibraryReachability, NetworkAddress)
+- Librerie su unita' esterna          -> MusicLibraryService.swift (DriveLibraryService)
+- Aspetto di un pannello di vetro     -> AppDelegate.swift (GlassModalPresenter) e
+                                         GlassBars.swift

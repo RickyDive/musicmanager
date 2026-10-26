@@ -1,0 +1,84 @@
+name: MusicManager
+options:
+  bundleIdPrefix: com.crdev
+  deploymentTarget:
+    macOS: "26.0"
+targets:
+  MusicManager:
+    type: application
+    platform: macOS
+    sources:
+      - MusicManager
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.crdev.MusicManager
+        PRODUCT_NAME: Music Manager
+        SWIFT_VERSION: "5.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        SWIFT_OBJC_BRIDGING_HEADER: MusicManager/MusicManager-Bridging-Header.h
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Solo Apple Silicon: niente build/binari Intel, niente universal binary.
+        ARCHS: arm64
+        VALID_ARCHS: arm64
+        EXCLUDED_ARCHS: x86_64
+        ONLY_ACTIVE_ARCH: YES
+        # Homebrew su Apple Silicon installa in /opt/homebrew (il percorso Intel /usr/local
+        # non serve più, dato che non si compila per x86_64).
+        HEADER_SEARCH_PATHS:
+          - /opt/homebrew/include
+        LIBRARY_SEARCH_PATHS:
+          - /opt/homebrew/lib
+        OTHER_LDFLAGS:
+          - -lmtp
+          - -lusb-1.0
+        # Le librerie libmtp/libusb vengono copiate nel bundle (Contents/Frameworks) da Scripts/bundle-libs.sh.
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+        # Lo script di build legge /opt/homebrew: serve che Xcode non lo isoli.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # Senza account Apple Developer non c'è notarizzazione: niente hardened runtime (serve solo per quella) e firma ad hoc.
+        ENABLE_HARDENED_RUNTIME: NO
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+    postBuildScripts:
+      - name: Incorpora libmtp e libusb nel bundle
+        path: Scripts/bundle-libs.sh
+        basedOnDependencyAnalysis: false
+    entitlements:
+      path: MusicManager/MusicManager.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.device.usb: true
+    info:
+      path: MusicManager/Info.plist
+      properties:
+        CFBundleName: Music Manager
+        CFBundleDisplayName: Music Manager
+        CFBundleShortVersionString: "2.2"
+        CFBundleVersion: "19"
+        LSMinimumSystemVersion: "26.0"
+        LSApplicationCategoryType: public.app-category.utilities
+        NSPrincipalClass: NSApplication
+        CFBundleIconName: AppIcon
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, it]
+        # Indirizzo della pagina dove inviare i feedback (es. https://github.com/UTENTE/REPO/issues/new/choose). Vuoto = il menu Aiuto copia solo la diagnostica.
+        MMFeedbackURL: "https://github.com/RickyDive/musicmanager/issues/new/choose"
+        NSAppleEventsUsageDescription: "L'app può creare e popolare playlist nell'app Musica, per salvare anche li le Custom Playlist create qui."
+        NSLocalNetworkUsageDescription: "L'app riconosce la rete in cui si trova (dal router) per distinguere le librerie condivise della rete locale da quelle di altre reti."
+        NSAppleMusicUsageDescription: "L'app legge la tua libreria di Musica per trasferire i brani sul dispositivo Garmin."
+
+# Scheme condiviso esplicito: serve a xcodebuild da Terminale (Scripts/build-release.sh).
+schemes:
+  MusicManager:
+    build:
+      targets:
+        MusicManager: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

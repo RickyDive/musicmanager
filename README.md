@@ -4,7 +4,7 @@
 
 A macOS app that transfers music, albums and playlists from the **Music** app library to a **Garmin** watch (Fenix, Forerunner, Edge…) over USB (MTP), and manages what is on the watch.
 
-> **Version 2.1.** Feedback is welcome: open an [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
+> **Version 2.2.** Feedback is welcome: open an [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
 > Independent project, not affiliated with or endorsed by Garmin or Apple.
 
 > **Scope:** music flows one way, from your Mac library to the device. The app never copies audio from a device and does not access other devices' libraries. See [docs/SCOPE.md](docs/SCOPE.md).
@@ -26,6 +26,12 @@ The app is not notarized (I don't have an Apple Developer account): on first lau
 - **Custom Playlist**: build a playlist from any tab, save it to a file or to Music, send it to the watch.
 - Storage bar (System, Data, Maps, Services, Music, incoming selection) with tooltips; streaming-service storage is detected, never touched.
 - Artwork, mini player with AirPlay, remote libraries (SMB), deletion and cleanup of the Music folder.
+- **External Drive Libraries**: browse and send music kept in a folder on a USB drive, disk or network folder, with the app's own index (only formats your Garmin accepts; nothing is written to your files).
+- **Right-click menus** for every context: songs (full menu: Send to Custom / Device, Artwork Online Fix, Go to Album / Artist, Find Similar, Show in Playlist), playlist / album / artist headers (two Send rows naming the item and its song count) and the whole mini player. Subtitles show how many songs can actually be sent, e.g. "2 albums / 37 songs (6 transferable)".
+- Mini player: mute button that remembers the previous volume.
+- All dialogs (Fix Artwork, transfer report, Find Similar, delete, send summary…) are centred glass panels.
+- Notification bell: the dot shows the most severe unread message (red = error, orange = warning).
+- Network libraries (SMB): mounted at launch (3 attempts, only if the server answers), with the real server host saved so it works even when the share name does not resolve; unreachable servers show an orange (offline) or red (no server) notice instead of a system dialog.
 - Interface in English and Italian.
 
 ## Reporting a problem
@@ -47,19 +53,17 @@ To build the DMG: `Scripts/build-release.sh` (see [docs/RELEASING.md](docs/RELEA
 ## Privacy
 The app sends no data to servers of its own. Optional feature (off by default): the software update check asks Garmin's servers whether a new version exists, sending the contents of `GarminDevice.xml` through an undocumented service.
 
-## What is new in 2.1
-- Music and device: genre filter and "Find similar"; multi-disc albums with "Disc n of m" headers; selection checkboxes and an "on device" status; green "on device" arrow on albums and artists; Shift-click range selection and drag-to-select.
-- Sending: several playlists at once with a per-playlist transfer window, mixed sends (whole playlists plus loose songs) and a **Cancel** button that stops the send and shows what was and was not sent. Send is disabled when the selection does not fit.
-- Delete: a confirmation sheet lists the songs and the playlists involved; affected playlists are rewritten without them.
-- Storage bar: *System*, *Data*, *Maps*, *Services* (Spotify, Amazon Music, Deezer…), *Music*; free space written inside the bar, a *Storage Capacity* row, and an orange or red warning when the space is almost gone.
-- Player and AirPlay: volume that works with Apple TV, HomePod and amplifiers ("AirPlay as audio", on by default), the in-app slider follows the AirPlay device, and the Apple TV shows cover, artist and title (Now Playing); media keys and Control Center work.
-- Garmin devices mounted as a disk (e.g. Edge): information and Eject. **Experimental, off by default**: music on external drives and SD cards (Settings ▸ Advanced ▸ Tools).
-- Settings ▸ Advanced ▸ Tools: optional Device File Manager (read-only), detailed log switch with *Show Log File*; Help ▸ Save GarminDevice.xml / Save device tree.
-- Faster start: the Music library is read in parallel. All settings are global; flat buttons and a new icon; the app is now called **Music Manager**.
+## What is new in 2.2
+- **External Drive Libraries** (Settings ▸ Advanced, up to 3): a folder of audio files on a USB drive, disk or network folder becomes a library, with its own index built from the tags. Only formats your Garmin accepts are kept; FLAC, WAV, AIFF and ALAC are shown but cannot be sent. Incremental rescan, covers from the files, **Eject** button.
+- **Remote (network) libraries**: more reliable mounting (the server is checked first, no long waits or system errors), the **Mount automatically** switch and a three-state status dot, live progress of the first XML read, a warning when the XML on the server has changed, playback with loading and slow-connection detection, and unmount of the volumes the app mounted when it quits.
+- **Music and artwork**: a question before adding songs to Music (Settings ▸ General), a redesigned online artwork panel, faster start (saved file paths, library re-read when you return to the app), a *Threads to read the library* option, duplicates listed with a checkbox for each song.
+- **Interface**: floating glass bars, an Xcode-style title bar with an activity capsule, one refresh and one search (⌘F), a notification bell, centred glass dialogs, a compact mode for low resolutions, richer right-click menus and mini player, one rounded selection highlight, typing in lists with the typed text in the letter indicator, three Settings tables with the same layout, revised Italian texts and a new icon.
 
-**Known limits:** not tested on macOS 26; not notarized (see [docs/INSTALL.md](docs/INSTALL.md) if the first launch is blocked); no remote control of the app from the Apple TV; very old AirPlay receivers may be refused by macOS itself.
+**Good to know:** with remote libraries the first read is slow and later opens are instant; typing in lists positions only on the first letter there, so use the magnifier search. With two shares of the same name the Finder can keep an empty "ghost" entry after unmounting (`killall Finder` or a restart clears it). The software update check follows Garmin's staged distribution, as Garmin Express does.
 
-Full history: [CHANGELOG.md](CHANGELOG.md).
+**Known limits:** not tested on macOS 26 (developed and tested on macOS 27); not notarized (see [docs/INSTALL.md](docs/INSTALL.md) if the first launch is blocked); lossless formats are not converted or sent; playlists found in a drive folder are not imported; no remote control of the app from the Apple TV; very old AirPlay receivers may be refused by macOS itself.
+
+Full history: [CHANGELOG.md](CHANGELOG.md). Release text: [docs/RELEASE-NOTES-2.2.md](docs/RELEASE-NOTES-2.2.md).
 
 ## License and official version
 Music Manager is free software, released under the **GNU GPL v3.0** ([LICENSE](LICENSE) file). Copyright (C) 2026 Riccardo Colaiori (cr.developer).
