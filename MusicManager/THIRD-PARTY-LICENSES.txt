@@ -1,0 +1,27 @@
+Music Manager – Third-Party Licenses / Licenze di terze parti
+
+Music Manager is free software: GNU General Public License v3.0. Copyright (C) 2026 Riccardo Colaiori (cr.developer).
+Music Manager è software libero: licenza GNU GPL v3.0. Copyright (C) 2026 Riccardo Colaiori (cr.developer).
+Source code / Codice sorgente: https://github.com/RickyDive/musicmanager
+The exact versions of the libraries below are listed in Contents/Resources/BUNDLED-LIBS.txt.
+Le versioni esatte delle librerie sotto sono in Contents/Resources/BUNDLED-LIBS.txt.
+
+This app bundles the following libraries (in Contents/Frameworks), dynamically linked:
+Questa app incorpora le seguenti librerie (in Contents/Frameworks), collegate dinamicamente:
+
+1. libmtp – GNU Lesser General Public License v2.1 or later
+   https://github.com/libmtp/libmtp
+2. libusb – GNU Lesser General Public License v2.1 or later
+   https://libusb.info / https://github.com/libusb/libusb
+
+Any other Homebrew library found in Contents/Frameworks is a dependency of the two above and keeps its own license.
+Eventuali altre librerie in Contents/Frameworks sono dipendenze delle due sopra e mantengono la propria licenza.
+
+Because the libraries are dynamically linked and shipped as separate .dylib files, you may replace them with your own
+build of the same libraries. Source code: see the URLs above and the project repository.
+Le librerie sono file .dylib separati: puoi sostituirle con una tua versione compilata. Codice sorgente: URL sopra.
+
+Full license text / Testo completo: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+Music Manager is an independent project, not affiliated with or endorsed by Garmin or Apple.
+Music Manager è un progetto indipendente, non affiliato né approvato da Garmin o Apple.
