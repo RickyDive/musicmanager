@@ -1,6 +1,6 @@
 # Music Manager — Project Notes
 
-**Current version: 2.2 (build 19, final)** · macOS 26+ · Apple Silicon only · GPL v3.0 · © 2026 Riccardo Colaiori (cr.developer)
+**Current version: 2.3 Beta 1 (build 34, performance phase)** · macOS 26+ · Apple Silicon only · GPL v3.0 · © 2026 Riccardo Colaiori (cr.developer)
 
 Technical notes for contributors and testers: what the app does, how it is built, how it talks to the watch, which decisions were taken on purpose, and what is still open. For user-facing changes per release see [CHANGELOG.md](../CHANGELOG.md); for installation see [INSTALL.md](INSTALL.md); for test scenarios see [TESTING.md](TESTING.md) (Italian).
 

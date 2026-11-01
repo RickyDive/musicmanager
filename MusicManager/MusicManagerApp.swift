@@ -453,3 +453,42 @@ struct HelpMenuCommands: Commands {
         }
     }
 }
+
+/// Diagnostica 2.3 Beta 1 (build 22): sorveglia il thread principale. Ogni 0,1 s un timer segna l'ora; se un giro arriva con più di
+/// 0,35 s di ritardo l'interfaccia è rimasta ferma, e il registro dettagliato riporta quanto, l'ultimo evento (clic, tasto, scorrimento)
+/// con quanto tempo prima, l'ultima azione misurata, memoria e thread. Scrive solo con il registro dettagliato acceso.
+@MainActor
+enum StallWatchdog {
+    static var lastAction = ""
+    private static var lastTick = Date()
+    private static var lastEvent = ""
+    private static var lastEventTime = Date.distantPast
+    private static var started = false
+
+    static func start() {
+        guard !started else { return }
+        started = true
+        lastTick = Date()
+        NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]) { event in
+            Task { @MainActor in
+                lastEvent = event.type == .scrollWheel ? "scorrimento" : (event.type == .keyDown ? "tasto" : "clic")
+                lastEventTime = Date()
+            }
+            return event
+        }
+        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
+            Task { @MainActor in tick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private static func tick() {
+        let now = Date()
+        let stall = now.timeIntervalSince(lastTick) - 0.1
+        lastTick = now
+        guard stall > 0.35, AppLog.detailed else { return }
+        let sinceEvent = now.timeIntervalSince(lastEventTime)
+        let event = sinceEvent < 30 ? "\(lastEvent) \(String(format: "%.1f", sinceEvent)) s fa" : "nessuno"
+        AppLog.debug("[prestazioni] INTERFACCIA FERMA per \(String(format: "%.2f", stall)) s; ultimo evento: \(event); ultima azione: \(lastAction.isEmpty ? "—" : lastAction); memoria \(ProcessMemory.residentMB) MB; thread \(ProcessMemory.threadCount)")
+    }
+}

@@ -127,7 +127,13 @@ struct LocalTrack: Identifiable, Hashable, Sendable, Codable {
         return nil
     }
 
-    var isTransferable: Bool { blockedReason == nil }
+    /// Stessa regola di `blockedReason`, senza comporre testi né testi tradotti: è chiamata milioni di volte sugli elenchi grandi.
+    var isTransferable: Bool {
+        if devicePath != nil { return true }
+        if isDRMProtected || isCloud || isLossless { return false }
+        guard let url else { return false }
+        return Self.supportedExtensions.contains(url.pathExtension.lowercased())
+    }
 }
 
 /// Tipo di una playlist di Musica: normale, smart (regole automatiche) o Genius.

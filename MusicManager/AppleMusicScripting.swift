@@ -170,7 +170,10 @@ enum AppleMusicScripting {
         """
         script += addLines(for: tracks)
         script += "\n    return count of tracks of targetPlaylist\nend tell"
-        return Int(try run(script)?.int32Value ?? 0)
+        let started = Date()
+        let added = Int(try run(script)?.int32Value ?? 0)
+        logWrite("createPlaylist", name, requested: tracks.count, added: added, since: started)
+        return added
     }
 
     /// Aggiunge brani a una playlist della cartella dell'app (creata se manca); restituisce quanti ne sono stati aggiunti.
@@ -188,7 +191,18 @@ enum AppleMusicScripting {
         """
         script += addLines(for: tracks)
         script += "\n    return (count of tracks of targetPlaylist) - countBefore\nend tell"
-        return Int(try run(script)?.int32Value ?? 0)
+        let started = Date()
+        let added = Int(try run(script)?.int32Value ?? 0)
+        logWrite("addTracks", name, requested: tracks.count, added: added, since: started)
+        return added
+    }
+
+    /// Diagnostica (2.3 Beta 1): tempo dello script di scrittura in Musica, per brano, e se gira sul thread principale
+    /// (in quel caso l'interfaccia resta ferma per tutta la durata).
+    private static func logWrite(_ what: String, _ name: String, requested: Int, added: Int, since start: Date) {
+        let elapsed = Date().timeIntervalSince(start)
+        let perTrack = requested > 0 ? elapsed * 1000 / Double(requested) : 0
+        AppLog.debug("[prestazioni] Script Musica \(what) «\(name)»: \(requested) brani richiesti, \(added) aggiunti, \(String(format: "%.2f", elapsed)) s (\(String(format: "%.0f", perTrack)) ms per brano); thread principale: \(Thread.isMainThread ? "sì" : "no")")
     }
 
     // MARK: Aggiunta di file alla libreria
@@ -280,7 +294,10 @@ enum AppleMusicScripting {
             throw ScriptingError.scriptCreationFailed
         }
         var errorInfo: NSDictionary?
+        let runStart = Date()
         let result = appleScript.executeAndReturnError(&errorInfo)
+        let runTime = Date().timeIntervalSince(runStart)
+        if runTime > 0.5 { AppLog.debug("[prestazioni] AppleScript lento: \(String(format: "%.2f", runTime)) s (\(script.count) caratteri)") }
         if let errorInfo {
             let message = (errorInfo[NSAppleScript.errorMessage] as? String) ?? t("error_unknown")
             throw ScriptingError.appleScriptError(message)

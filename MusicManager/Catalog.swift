@@ -41,6 +41,8 @@ protocol CatalogTrack: Identifiable, Hashable {
     var album: String { get }
     var trailingText: String? { get }
     var warning: String? { get }
+    /// Come `warning != nil` ma senza comporre il testo: per i conteggi sugli elenchi grandi (build 25).
+    var isBlocked: Bool { get }
     /// Durata in secondi; 0 se sconosciuta.
     var duration: TimeInterval { get }
     /// Artista dell'album (può essere vuoto: allora vale l'artista del brano). Serve alla scheda Artisti.
@@ -239,6 +241,7 @@ extension LocalTrack: CatalogTrack {
     /// Niente dimensione in MB negli elenchi Apple Music: al suo posto c'è l'icona della copertina.
     var trailingText: String? { nil }
     var warning: String? { blockedReason }
+    var isBlocked: Bool { !isTransferable }
     var sizeInBytes: Int64 { Int64(max(0, fileSize)) }
 }
 
@@ -246,6 +249,7 @@ extension DeviceTrack: CatalogTrack {
     /// Niente dimensione in MB nemmeno sul dispositivo: nella riga c'è la durata (come negli elenchi Music).
     var trailingText: String? { nil }
     var warning: String? { nil }
+    var isBlocked: Bool { false }
     var sizeInBytes: Int64 { Int64(clamping: size) }
 }
 

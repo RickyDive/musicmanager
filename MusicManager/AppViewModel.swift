@@ -78,6 +78,41 @@ enum ProcessMemory {
         }
         return result == KERN_SUCCESS ? Int(info.resident_size / 1_048_576) : -1
     }
+
+    /// Numero di thread dell'app (2.3 Beta 1, solo diagnostica): se cresce a ogni cambio libreria qualcosa non viene fermato.
+    static var threadCount: Int {
+        var list: thread_act_array_t?
+        var count = mach_msg_type_number_t(0)
+        guard task_threads(mach_task_self_, &list, &count) == KERN_SUCCESS, let list else { return -1 }
+        vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: list)), vm_size_t(Int(count) * MemoryLayout<thread_t>.stride))
+        return Int(count)
+    }
+}
+
+/// Cronometro per il registro dettagliato (2.3 Beta 1, fase prestazioni): misura le fasi di un'operazione lenta e, alla fine,
+/// il totale con memoria e numero di thread prima/dopo. Scrive solo con il registro dettagliato acceso.
+struct PerfTimer {
+    private let label: String
+    private let start = Date()
+    private var last = Date()
+    private let memoryStart = ProcessMemory.residentMB
+    private let threadsStart = ProcessMemory.threadCount
+
+    init(_ label: String) { self.label = label }
+
+    /// Fine di una fase: tempo trascorso dalla fase precedente.
+    mutating func mark(_ phase: String) {
+        let now = Date()
+        let elapsed = now.timeIntervalSince(last)
+        AppLog.debug("[prestazioni] \(label) · \(phase): \(String(format: "%.2f", elapsed)) s")
+        last = now
+    }
+
+    /// Fine dell'operazione: totale, memoria e thread.
+    func end(_ extra: String = "") {
+        let total = Date().timeIntervalSince(start)
+        AppLog.debug("[prestazioni] \(label) · totale \(String(format: "%.2f", total)) s; memoria \(memoryStart) → \(ProcessMemory.residentMB) MB; thread \(threadsStart) → \(ProcessMemory.threadCount)\(extra.isEmpty ? "" : "; " + extra)")
+    }
 }
 
 struct DeletionProgress: Identifiable {
@@ -451,10 +486,10 @@ final class AppViewModel: ObservableObject {
         didSet { if appleCategory != oldValue { updatePendingTransferBytes() } }   // nella Custom la barra mostra la sua dimensione
     }
     @Published var tracks: [LocalTrack] = [] {
-        didSet { deviceSummaryCache = nil }   // le durate mancanti sul dispositivo si ricavano dalla libreria
+        didSet { deviceSummaryCache = nil; visibleTracksStore = nil; visiblePlaylistsStore = nil }   // le durate mancanti sul dispositivo si ricavano dalla libreria
     }
     @Published var playlists: [TrackGroup<LocalTrack>] = [] {
-        didSet { rebuildPlaylistMembership() }
+        didSet { rebuildPlaylistMembership(); visiblePlaylistsStore = nil }
     }
     /// Indice «id brano → playlist che lo contengono (id, titolo)», ricostruito a ogni cambio delle playlist.
     /// Serve all'icona «in playlist» e al menu «Mostra in playlist» del pannello Apple Music.
@@ -730,7 +765,9 @@ final class AppViewModel: ObservableObject {
     private var stagedPlaylists: [(name: String, tracks: [LocalTrack])] = []
     private var lastFullySelectedPlaylistID: String?
     /// Segue l'impostazione «Mostra solo i brani trasferibili» (Impostazioni → Generale).
-    @Published var showOnlyTransferable = AppSettings.shared.showOnlyTransferable
+    @Published var showOnlyTransferable = AppSettings.shared.showOnlyTransferable {
+        didSet { visibleTracksStore = nil; visiblePlaylistsStore = nil }
+    }
     private var transferableObserver: AnyCancellable?
     private var localTracks: [LocalTrack] = [] {
         didSet {
@@ -1153,6 +1190,7 @@ final class AppViewModel: ObservableObject {
     }
 
     init() {
+        StallWatchdog.start()
         NotificationCenter.default.addObserver(forName: ArtworkCache.didClearNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.artworkRevision += 1 }   // azzera le origini memorizzate (didSet)
         }
@@ -1201,16 +1239,29 @@ final class AppViewModel: ObservableObject {
         Self.current = self
     }
 
+    /// Elenchi «solo trasferibili» in memoria (build 26): prima si rifiltravano tutti i brani a OGNI aggiornamento dell'interfaccia
+    /// (55.000 brani nella libreria remota: copie di `LocalTrack`, secondi di blocco). Si azzerano quando cambiano brani,
+    /// playlist o l'impostazione.
+    private var visibleTracksStore: [LocalTrack]?
+    private var visiblePlaylistsStore: [TrackGroup<LocalTrack>]?
+
     var visibleTracks: [LocalTrack] {
-        showOnlyTransferable ? tracks.filter(\.isTransferable) : tracks
+        guard showOnlyTransferable else { return tracks }
+        if let stored = visibleTracksStore { return stored }
+        let value = tracks.filter(\.isTransferable)
+        visibleTracksStore = value
+        return value
     }
 
     var visiblePlaylists: [TrackGroup<LocalTrack>] {
         guard showOnlyTransferable else { return playlists }
-        return playlists.compactMap { g in
+        if let stored = visiblePlaylistsStore { return stored }
+        let value = playlists.compactMap { g -> TrackGroup<LocalTrack>? in
             let ok = g.tracks.filter(\.isTransferable)
             return ok.isEmpty ? nil : TrackGroup(id: g.id, title: g.title, subtitle: playlistSubtitle(ok), tracks: ok)
         }
+        visiblePlaylistsStore = value
+        return value
     }
 
     /// Playlist del dispositivo scelte per intero con il quadrato di spunta (id dei gruppi), impostate da
@@ -1408,6 +1459,7 @@ final class AppViewModel: ObservableObject {
         // (causa più comune dell'avviso innocuo ma rumoroso "Publishing changes from within
         // view updates").
         await Task.yield()
+        let performStart = Date()
         busyScope = scope
         isBusy = true
         status = message
@@ -1422,6 +1474,7 @@ final class AppViewModel: ObservableObject {
             }
         }
         isBusy = false
+        AppLog.debug("[prestazioni] operazione «\(message)» (\(scope == .library ? "libreria" : "dispositivo")): \(String(format: "%.2f", Date().timeIntervalSince(performStart))) s")
     }
 
     // MARK: - Finestra di riepilogo trasferimento
@@ -1457,6 +1510,13 @@ final class AppViewModel: ObservableObject {
         guard !isBusy, externalLibraryName == nil, externalLibraryID == nil, !localTracks.isEmpty,
               Date().timeIntervalSince(lastLibraryLoad) > 5 else { return }
         await loadLibrary(silent: true)
+    }
+
+    /// Dopo una scrittura in Musica l'app rilegge TUTTA la libreria (2.3 Beta 1: il tempo si registra, per capire quanto pesa).
+    private func reloadLibraryAfterMusicWrite() async {
+        let start = Date()
+        await loadLibrary()
+        AppLog.debug("[prestazioni] Salvataggio in Musica: rilettura completa della libreria dopo la scrittura: \(String(format: "%.2f", Date().timeIntervalSince(start))) s")
     }
 
     func loadLibrary(reloadRemote: Bool = false, silent: Bool = false) async {
@@ -1496,6 +1556,7 @@ final class AppViewModel: ObservableObject {
             AppLog.debug("Libreria: lettura iniziata (Musica \(musicWasRunning ? "aperta" : "chiusa"))")
             let catalog = try await library.loadCatalog()
             AppLog.debug("Libreria: lettura finita in \(String(format: "%.1f", Date().timeIntervalSince(loadStart))) s — \(catalog.tracks.count) brani, \(catalog.playlists.count) playlist")
+            let assignTimer = PerfTimer("Libreria locale: preparazione degli elenchi")
 
             cancelAlbumArtworkTasks()
             artworkOrigins = [:]
@@ -1514,6 +1575,7 @@ final class AppViewModel: ObservableObject {
             guard externalLibraryName == nil else { return }
             tracks = localTracks
             setPlaylists(localPlaylists, kinds: localPlaylistKinds)
+            assignTimer.end("\(catalog.tracks.count) brani, \(catalog.playlists.count) playlist")
             let ok = catalog.tracks.filter(\.isTransferable).count
             status = t("status_library_loaded", catalog.tracks.count, ok, catalog.playlists.count)
             // Nessun brano in Musica: avviso con le istruzioni (vedi l'alert in `ContentView`).
@@ -1538,19 +1600,23 @@ final class AppViewModel: ObservableObject {
         guard externalLibraryName != nil else { return }
         let switchStart = Date()
         let memoryBefore = ProcessMemory.residentMB
+        var perf = PerfTimer("Ritorno alla libreria locale")
         externalLibraryName = nil
         externalLibraryID = nil
         selectedTrackIDs = []
         let cancelled = cancelAlbumArtworkTasks()
+        perf.mark("ricerche copertine annullate: \(cancelled)")
         artworkOrigins = [:]
         musicArtworkStore = [:]
         musicOrigins = [:]
         artworkRevision += 1
         tracks = localTracks
         setPlaylists(localPlaylists, kinds: localPlaylistKinds)
+        perf.mark("elenchi della libreria locale")
         let ok = tracks.filter(\.isTransferable).count
         status = t("status_library_loaded", tracks.count, ok, playlists.count)
         AppLog.debug("Ritorno alla libreria locale in \(String(format: "%.2f", Date().timeIntervalSince(switchStart))) s; ricerche copertine annullate: \(cancelled); memoria dell'app: \(memoryBefore) → \(ProcessMemory.residentMB) MB")
+        perf.end("\(tracks.count) brani")
     }
 
     /// Libreria di un'altra rete in attesa della conferma dell'utente (alert Sì/No in `ContentView`).
@@ -1604,8 +1670,10 @@ final class AppViewModel: ObservableObject {
         if remotePlaybackDisabled { status = "✅ " + t("remote_playback_restored_status") }
         remotePlaybackDisabled = false   // la disattivazione vale per la libreria in uso: scegliendone un'altra si riattiva
         await perform(t("external_status_reading"), scope: .library) {
+            var perf = PerfTimer("Apertura libreria remota «\(cfg.nickname)»\(refresh ? " (aggiornamento)" : "")")
             let catalog = try await RemoteLibraryManager.shared.load(cfg, verify: false, inSettings: false,
                                                                     preferCache: !refresh)
+            perf.mark("lettura (copia salvata o XML)")
             networkLibraryUsedThisSession = true
             // Librerie salvate prima: la rete in cui si è aperta con successo diventa la sua rete «di casa».
             if cfg.homeNetwork == nil, let network = networkID { AppSettings.shared.setHomeNetwork(network, for: cfg.id) }
@@ -1625,8 +1693,10 @@ final class AppViewModel: ObservableObject {
                                   subtitle: playlistSubtitle(items), tracks: items)
             }, kinds: Dictionary(catalog.playlists.map { ("playlist:\($0.id)", $0.kind ?? .regular) },
                                  uniquingKeysWith: { a, _ in a }))
+            perf.mark("preparazione degli elenchi")
             let ok = catalog.tracks.filter(\.isTransferable).count
             status = t("status_library_loaded", catalog.tracks.count, ok, catalog.playlists.count)
+            perf.end("\(catalog.tracks.count) brani, \(catalog.playlists.count) playlist")
         }
         // Aperta dalla copia salvata: se l'XML sul server è cambiato nel frattempo, si avvisa (non si rilegge da soli).
         if !refresh {
@@ -1661,12 +1731,15 @@ final class AppViewModel: ObservableObject {
             return
         }
         await perform(t("drive_status_reading"), scope: .library) {
+            var perf = PerfTimer("Apertura libreria su unità «\(cfg.nickname)»\(rescan ? " (con riscansione)" : "")")
             if rescan || DriveLibraryService.loadIndex(cfg.id) == nil {
                 try await DriveLibraryManager.shared.scan(cfg) { [weak self] text in self?.status = text }
             }
+            perf.mark("scansione/indice")
             guard let catalog = await DriveLibraryManager.shared.catalog(for: cfg) else {
                 throw DriveLibraryError.unavailable(cfg.nickname)
             }
+            perf.mark("catalogo")
             let byID = Dictionary(catalog.tracks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             externalLibraryName = cfg.nickname
             externalLibraryID = cfg.id
@@ -1683,8 +1756,10 @@ final class AppViewModel: ObservableObject {
                                   subtitle: playlistSubtitle(items), tracks: items)
             }, kinds: Dictionary(catalog.playlists.map { ("playlist:\($0.id)", $0.kind ?? .regular) },
                                  uniquingKeysWith: { a, _ in a }))
+            perf.mark("preparazione degli elenchi")
             let ok = catalog.tracks.filter(\.isTransferable).count
             status = t("status_library_loaded", catalog.tracks.count, ok, catalog.playlists.count)
+            perf.end("\(catalog.tracks.count) brani, \(catalog.playlists.count) playlist")
         }
         // Dispositivo collegato diverso da quello del catalogo e con formati diversi: si propone di rifarlo.
         let connected = DriveLibraryManager.shared.deviceChoices().first(where: \.connected)
@@ -2551,8 +2626,10 @@ final class AppViewModel: ObservableObject {
             // Rilettura della libreria: i nuovi brani possono comparire con un po' di ritardo.
             if !addedIDs.isEmpty {
                 let wanted = Set(addedIDs.values)
-                for _ in 0..<6 {
+                for attempt in 1...6 {
+                    let readStart = Date()
                     await loadLibrary()
+                    AppLog.debug("[prestazioni] Rilettura libreria dopo importazione, tentativo \(attempt): \(String(format: "%.2f", Date().timeIntervalSince(readStart))) s")
                     if wanted.isSubset(of: Set(localTracks.map(\.id))) { break }
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                 }
@@ -5129,7 +5206,7 @@ final class AppViewModel: ObservableObject {
                 status = savedToMusicStatus(name, added: added, expected: tracks.count)
                 // Ricarica la libreria: cosi la playlist appena salvata compare subito nella
                 // scheda Playlist di Apple Music, senza bisogno di un refresh manuale.
-                await loadLibrary()
+                await reloadLibraryAfterMusicWrite()
                 syncCustomPlaylistReferences(afterSavingTo: name)
             }
         }
@@ -5440,7 +5517,7 @@ final class AppViewModel: ObservableObject {
                 try AppleMusicScripting.deletePlaylist(named: conflict.name)
                 let added = try AppleMusicScripting.createPlaylist(named: conflict.name, tracks: conflict.tracks)
                 status = savedToMusicStatus(conflict.name, added: added, expected: conflict.tracks.count)
-                await loadLibrary()
+                await reloadLibraryAfterMusicWrite()
                 syncCustomPlaylistReferences(afterSavingTo: conflict.name)
             }
         }
@@ -5472,7 +5549,7 @@ final class AppViewModel: ObservableObject {
                 } else {
                     let added = try AppleMusicScripting.addTracks(fresh, toPlaylistNamed: conflict.name)
                     status = savedToMusicStatus(conflict.name, added: added, expected: fresh.count)
-                    await loadLibrary()
+                    await reloadLibraryAfterMusicWrite()
                     syncCustomPlaylistReferences(afterSavingTo: conflict.name)
                     offerToLoadFullAppleMusicPlaylistIntoCustom(named: conflict.name)
                 }
@@ -5495,7 +5572,7 @@ final class AppViewModel: ObservableObject {
             await perform(t("status_saving_to_apple_music", pending.name), scope: .library) {
                 let added = try AppleMusicScripting.addTracks(pending.allTracks, toPlaylistNamed: pending.name)
                 status = savedToMusicStatus(pending.name, added: added, expected: pending.allTracks.count)
-                await loadLibrary()
+                await reloadLibraryAfterMusicWrite()
                 syncCustomPlaylistReferences(afterSavingTo: pending.name)
                 offerToLoadFullAppleMusicPlaylistIntoCustom(named: pending.name)
             }
@@ -5511,7 +5588,7 @@ final class AppViewModel: ObservableObject {
             await perform(t("status_saving_to_apple_music", pending.name), scope: .library) {
                 let added = try AppleMusicScripting.addTracks(pending.freshTracks, toPlaylistNamed: pending.name)
                 status = savedToMusicStatus(pending.name, added: added, expected: pending.freshTracks.count)
-                await loadLibrary()
+                await reloadLibraryAfterMusicWrite()
                 syncCustomPlaylistReferences(afterSavingTo: pending.name)
                 offerToLoadFullAppleMusicPlaylistIntoCustom(named: pending.name)
             }

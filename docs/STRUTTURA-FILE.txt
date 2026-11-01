@@ -1,4 +1,4 @@
-MUSIC MANAGER 2.2 (build 19) - MAPPA DEI FILE DEL PROGETTO
+MUSIC MANAGER 2.3 BETA 1 (build 34) - MAPPA DEI FILE DEL PROGETTO
 ======================================================================
 Guida per orientarsi in Xcode: cosa contiene ogni file e dove cercare.
 I numeri di riga sono indicativi (cambiano a ogni modifica): meglio cercare
