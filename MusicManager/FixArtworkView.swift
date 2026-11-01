@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// Stato della finestra "Fix Artwork": scorre i brani selezionati uno alla volta, mostra la
 /// copertina originale (se c'è) accanto a quella trovata online, e lascia all'utente la decisione
@@ -32,6 +33,8 @@ final class FixArtworkSession: ObservableObject, Identifiable {
     @Published private(set) var candidateCount = 0
     /// Vero se l'ultimo tentativo di salvare la copertina confermata è fallito (disco pieno...).
     @Published private(set) var saveFailed = false
+    /// Vero se per il brano mostrato c'è una copertina scelta dall'utente (in Fix Artwork): abilita «Revert».
+    @Published private(set) var isCurrentChosen = false
 
     private let fetchOriginal: (LocalTrack) async -> Data?
     private let fetchOnline: (LocalTrack) async -> [Data]
@@ -42,7 +45,11 @@ final class FixArtworkSession: ObservableObject, Identifiable {
     /// aggiornare le copertine mostrate negli elenchi senza aspettare la chiusura.
     private let onConfirmed: () -> Void
     /// Altri brani dello stesso album (stesso artista) che non hanno ancora una copertina confermata.
-    private let siblings: (LocalTrack) -> [LocalTrack]
+    private let siblings: (LocalTrack) async -> [LocalTrack]
+    /// Brani dello stesso album (compreso quello dato) che hanno una copertina scelta: quelli a cui si applica «Revert».
+    private let albumChosen: (LocalTrack) -> [LocalTrack]
+    /// Vero mentre si cercano i brani dello stesso album da proporre (lettura dei file, 2.3 Beta 3): «Confirm» e «Ignore» attendono.
+    @Published private(set) var isResolvingAlbum = false
 
     /// Domanda «applico la stessa copertina agli altri brani dell'album?» (nil = nessuna).
     struct AlbumPrompt {
@@ -91,13 +98,15 @@ final class FixArtworkSession: ObservableObject, Identifiable {
          fetchOriginal: @escaping (LocalTrack) async -> Data?,
          fetchOnline: @escaping (LocalTrack) async -> [Data],
          onConfirmed: @escaping () -> Void,
-         siblings: @escaping (LocalTrack) -> [LocalTrack] = { _ in [] },
+         siblings: @escaping (LocalTrack) async -> [LocalTrack] = { _ in [] },
+         albumChosen: @escaping (LocalTrack) -> [LocalTrack] = { _ in [] },
          onFinish: @escaping (Int) -> Void) {
         self.tracks = tracks
         self.fetchOriginal = fetchOriginal
         self.fetchOnline = fetchOnline
         self.onConfirmed = onConfirmed
         self.siblings = siblings
+        self.albumChosen = albumChosen
         self.onFinish = onFinish
         loadCurrent()
     }
@@ -105,7 +114,7 @@ final class FixArtworkSession: ObservableObject, Identifiable {
     var currentTrack: LocalTrack { tracks[index] }
     var canGoPrevious: Bool { previousIndex() != nil }
     var canGoNext: Bool { nextIndex() != nil }
-    var canConfirm: Bool { online == .found && currentOnlineData != nil }
+    var canConfirm: Bool { online == .found && currentOnlineData != nil && !isResolvingAlbum }
     var canGoPreviousCandidate: Bool { candidateIndex > 0 }
     var canGoNextCandidate: Bool { candidateIndex < candidates.count - 1 }
 
@@ -144,7 +153,7 @@ final class FixArtworkSession: ObservableObject, Identifiable {
     /// brano ha un artista diverso e altrimenti ogni brano sarebbe un album a sé (18 conferme invece di una); per gli altri album
     /// restano artista e album.
     static func albumKey(_ track: LocalTrack) -> String {
-        track.isCompilation ? "\u{1}compilation|" + track.album.lowercased() : (track.artist + "|" + track.album).lowercased()
+        track.isCompilation ? "\u{1}compilation|" + track.album.lowercased() : (track.albumOwner + "|" + track.album).lowercased()
     }
 
     /// Passa al brano successivo (se c'è). 2.3 Beta 2: se non ne restano (ultimo brano, o ultimo album dopo «Sì»/«No» a tutto l'album,
@@ -153,23 +162,93 @@ final class FixArtworkSession: ObservableObject, Identifiable {
         if canGoNext { next() } else { finish() }
     }
 
-    /// «Ignore» (2.3 Beta 2): lascia **tutto l'album** del brano mostrato com'è (nessuna copertina scelta) e passa al primo
-    /// brano di un altro album. I brani seguenti dello stesso album (stessa chiave artista|album, anche non contigui) si
-    /// saltano come quelli del «Sì» a tutto l'album (`albumAssigned`); segnati «ignorati» non fanno comparire l'avviso di «OK»,
-    /// perché è una scelta esplicita. Senza album, o con un solo brano, si salta solo il brano (come prima).
+    /// Domanda «ignoro anche gli altri brani dell'album?» (2.3 Beta 3, nil = nessuna).
+    struct IgnorePrompt {
+        let album: String
+        let tracks: [LocalTrack]
+    }
+    @Published var ignorePrompt: IgnorePrompt?
+
+    /// «Ignore»: se il brano mostrato ha altri brani dello stesso album ancora da controllare (stessa chiave artista|album, anche non
+    /// contigui) si chiede, come dopo «Confirm», se ignorarli tutti (`applyIgnoreToAlbum`) o solo questo (`declineIgnoreAlbum`).
+    /// Senza album, o senza altri brani da controllare, si ignora direttamente il brano mostrato.
     func ignore() {
+        guard !isResolvingAlbum else { return }
         let track = currentTrack
-        if outcomes[track.id] != .chosen { outcomes[track.id] = .ignored }
         if !track.album.isEmpty {
             let key = Self.albumKey(track)
-            for (i, other) in tracks.enumerated() where i > index && !albumAssigned.contains(other.id)
-                && Self.albumKey(other) == key {
-                albumAssigned.insert(other.id)
-                if outcomes[other.id] != .chosen { outcomes[other.id] = .ignored }
+            let others = tracks.filter { other in
+                other.id != track.id && !albumAssigned.contains(other.id) && outcomes[other.id] == nil
+                    && Self.albumKey(other) == key
+            }
+            if !others.isEmpty {
+                ignorePrompt = IgnorePrompt(album: track.album, tracks: others)
+                return
             }
         }
-        // Se non resta nessun altro album da vedere, il pannello si chiude da solo (come «Close»: le conferme sono già salvate).
+        markIgnored(track)
         advance()
+    }
+
+    private func markIgnored(_ track: LocalTrack) {
+        if outcomes[track.id] != .chosen { outcomes[track.id] = .ignored }
+    }
+
+    /// «Sì»: tutto l'album resta com'è. Gli altri brani si saltano come quelli del «Sì» di «Confirm» (`albumAssigned`: non contano
+    /// più nel «Brano n di N») e sono segnati «ignorati», così non fanno comparire l'avviso di «OK» (è una scelta esplicita).
+    func applyIgnoreToAlbum() {
+        guard let prompt = ignorePrompt else { return }
+        ignorePrompt = nil
+        markIgnored(currentTrack)
+        for other in prompt.tracks {
+            albumAssigned.insert(other.id)
+            markIgnored(other)
+        }
+        advance()
+    }
+
+    /// «No»: si ignora solo il brano mostrato; gli altri dell'album si guardano uno alla volta.
+    func declineIgnoreAlbum() {
+        guard ignorePrompt != nil else { return }
+        ignorePrompt = nil
+        markIgnored(currentTrack)
+        advance()
+    }
+
+    // MARK: - Revert (2.3 Beta 3)
+
+    /// Domanda «tornare all'originale?» (nil = nessuna): `tracks` sono i brani dell'album che hanno una copertina scelta.
+    struct RevertPrompt {
+        let album: String
+        let tracks: [LocalTrack]
+    }
+    @Published var revertPrompt: RevertPrompt?
+    var canRevert: Bool { isCurrentChosen && !isResolvingAlbum && albumPrompt == nil && ignorePrompt == nil }
+
+    /// «Revert»: chiede conferma di togliere la copertina scelta (per il brano e per tutti gli altri dello stesso album che ne hanno una).
+    func revert() {
+        guard canRevert else { return }
+        var list = albumChosen(currentTrack)
+        if !list.contains(where: { $0.id == currentTrack.id }) { list.insert(currentTrack, at: 0) }
+        revertPrompt = RevertPrompt(album: currentTrack.album, tracks: list)
+    }
+
+    func cancelRevert() { revertPrompt = nil }
+
+    /// Conferma: le copertine scelte si tolgono dall'archivio, quindi i brani tornano a quella di Musica (o a nessuna). Si resta sul brano
+    /// mostrato, che ora ha di nuovo solo l'originale e i candidati online (si può sceglierne un'altra).
+    func applyRevert() {
+        guard let prompt = revertPrompt else { return }
+        revertPrompt = nil
+        let keys = prompt.tracks.map { ArtworkCache.key(artist: $0.artist, title: $0.title, album: $0.album) }
+        ArtworkCache.removeChosen(keys: keys)
+        for track in prompt.tracks where tracks.contains(where: { $0.id == track.id }) {
+            outcomes[track.id] = .ignored   // scelta esplicita: resta l'originale
+            if track.id != currentTrack.id { albumAssigned.insert(track.id) }
+        }
+        promptedAlbums.remove(Self.albumKey(currentTrack))   // una nuova conferma può riproporre l'album
+        onConfirmed()
+        loadCurrent()
     }
 
     /// «Close»: chiude la finestra in qualsiasi momento; le conferme già date restano memorizzate
@@ -195,7 +274,7 @@ final class FixArtworkSession: ObservableObject, Identifiable {
         if confirmedData == data {
             saveFailed = false
             outcomes[track.id] = .chosen
-            if !proposeAlbum(for: track, data: data) { advance() }
+            proposeAlbumThenAdvance(for: track, data: data)
             return
         }
         guard ArtworkCache.storeConfirmed(key: key, imageData: data) else {
@@ -206,21 +285,27 @@ final class FixArtworkSession: ObservableObject, Identifiable {
         newlyConfirmedCount += 1
         confirmedData = data
         isCurrentConfirmed = true
+        isCurrentChosen = true
         outcomes[track.id] = .chosen
         onConfirmed()
-        if !proposeAlbum(for: track, data: data) { advance() }
+        proposeAlbumThenAdvance(for: track, data: data)
     }
 
-    /// Se altri brani dello stesso album sono senza copertina confermata, prepara la domanda.
-    /// Ritorna vero se la domanda è stata mostrata (il passaggio al brano successivo avviene dopo la risposta).
-    private func proposeAlbum(for track: LocalTrack, data: Data) -> Bool {
+    /// Se altri brani dello stesso album sono senza copertina propria né confermata, mostra la domanda (dopo la risposta si passa al
+    /// brano successivo); altrimenti passa subito al successivo. 2.3 Beta 3: la ricerca dei brani legge i file (asincrona), quindi
+    /// «Confirm» e «Ignore» restano fermi finché non è finita (`isResolvingAlbum`).
+    private func proposeAlbumThenAdvance(for track: LocalTrack, data: Data) {
         let albumKey = Self.albumKey(track)
-        guard !track.album.isEmpty, !promptedAlbums.contains(albumKey) else { return false }
-        let others = siblings(track)
-        guard !others.isEmpty else { return false }
+        guard !track.album.isEmpty, !promptedAlbums.contains(albumKey) else { advance(); return }
         promptedAlbums.insert(albumKey)
-        albumPrompt = AlbumPrompt(album: track.album, tracks: others, data: data)
-        return true
+        isResolvingAlbum = true
+        Task { @MainActor in
+            let others = await siblings(track)
+            isResolvingAlbum = false
+            guard !isFinished else { return }
+            if others.isEmpty { advance() }
+            else { albumPrompt = AlbumPrompt(album: track.album, tracks: others, data: data) }
+        }
     }
 
     /// «Sì»: la stessa copertina diventa quella confermata di tutti gli altri brani dell'album.
@@ -268,6 +353,7 @@ final class FixArtworkSession: ObservableObject, Identifiable {
         let track = currentTrack
         let key = ArtworkCache.key(artist: track.artist, title: track.title, album: track.album)
         saveFailed = false
+        manualAddFailed = false
         originalImage = nil
         originalLoaded = false
 
@@ -277,6 +363,7 @@ final class FixArtworkSession: ObservableObject, Identifiable {
         // Copertine online: prima quella già confermata (se c'è), poi quelle trovate dal servizio
         // (cercate una sola volta per brano in questa sessione).
         confirmedData = ArtworkCache.confirmedImage(forKey: key)
+        isCurrentChosen = ArtworkCache.isChosen(key: key)
         let alreadyFetched = fetchedCandidates[track.id]
         setCandidates(merged(confirmed: confirmedData, fetched: alreadyFetched ?? []),
                       finished: alreadyFetched != nil)
@@ -302,8 +389,29 @@ final class FixArtworkSession: ObservableObject, Identifiable {
     private func merged(confirmed: Data?, fetched: [Data]) -> [Data] {
         var result: [Data] = []
         if let confirmed { result.append(confirmed) }
+        // Copertine aggiunte a mano per questo brano (trascinate o incollate): subito dopo quella confermata, prima delle trovate online.
+        for data in manualCandidates[currentTrack.id] ?? [] where !result.contains(data) { result.append(data) }
         for data in fetched where !result.contains(data) { result.append(data) }
         return result
+    }
+
+    // MARK: - Copertina a mano (2.3 Beta 3)
+
+    /// Copertine aggiunte dall'utente (immagine trascinata dal Finder o da Safari, o incollata), per brano: valgono come una
+    /// copertina trovata online, quindi si confermano con «Confirm» (e si propongono all'album come le altre).
+    private var manualCandidates: [String: [Data]] = [:]
+    /// Vero se l'ultima immagine data non si è potuta leggere.
+    @Published private(set) var manualAddFailed = false
+
+    /// Aggiunge un'immagine (qualsiasi formato leggibile) come candidata del brano mostrato e la mostra.
+    func addManualCover(_ data: Data) {
+        guard let jpeg = ArtworkLookupService.compressedJPEG(from: data) else { manualAddFailed = true; return }
+        manualAddFailed = false
+        let id = currentTrack.id
+        if !(manualCandidates[id] ?? []).contains(jpeg) { manualCandidates[id, default: []].insert(jpeg, at: 0) }
+        setCandidates(merged(confirmed: confirmedData, fetched: fetchedCandidates[id] ?? []), finished: fetchedCandidates[id] != nil)
+        if let index = candidates.firstIndex(of: jpeg) { showCandidate(index) }
+        outcomes[id] = outcomes[id] == .chosen ? .chosen : .foundNotChosen
     }
 
     /// Imposta i candidati mostrati; `finished` indica che la ricerca di rete è terminata (senza
@@ -336,17 +444,19 @@ struct FixArtworkView: View {
     /// Chiude il pannello di vetro (chiamata da `isFinished`).
     var onClose: () -> Void = {}
     @State private var showOKWarning = false
+    /// Vero mentre un'immagine viene trascinata sopra la copertina online.
+    @State private var dropTargeted = false
 
     /// Larghezza comune dei quattro pulsanti di testo (Confirm, Ignore, Close, OK): quella dell'etichetta più lunga tra le lingue
-    /// più il margine dello stile piatto, così restano tutti uguali (come i pulsanti della finestra principale).
+    /// più un margine ridotto (2.3 Beta 3: 16 pt invece di 28, per far stare anche il pulsante Revert), così restano tutti uguali (come i pulsanti della finestra principale).
     private var textButtonWidth: CGFloat {
         let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         let widest = AppLanguage.allCases.flatMap { lang in
-            ["button_confirm", "button_ignore", "button_close", "button_ok"].map {
+            ["button_confirm", "button_ignore", "button_close", "button_done"].map {
                 (tFor(lang, $0) as NSString).size(withAttributes: [.font: font]).width
             }
         }.max() ?? 0
-        return max(ceil(widest) + 28, 84)
+        return max(ceil(widest) + 16, 70)
     }
 
     /// Testo dell'avviso di «OK»: copertine online trovate ma non scelte e brani non ancora controllati.
@@ -397,6 +507,19 @@ struct FixArtworkView: View {
                 artworkColumn(title: t("fix_artwork_online")) {
                     onlineContent
                         .overlay { candidateArrows }
+                        .overlay {
+                            if dropTargeted {
+                                RoundedRectangle(cornerRadius: 4).stroke(Color.accentColor, lineWidth: 3)
+                            }
+                        }
+                        .onDrop(of: [.fileURL, .image, .url], isTargeted: $dropTargeted) { handleDrop($0) }
+                        .help(t("fix_artwork_drop_hint"))
+                        .background {
+                            // ⌘V: incolla un'immagine copiata (da Safari, dal Finder, da un'altra app).
+                            Button("") { pasteCover() }
+                                .keyboardShortcut("v", modifiers: .command)
+                                .opacity(0).frame(width: 0, height: 0).allowsHitTesting(false)
+                        }
                 } footer: {
                     // Stessa scritta della finestra di trasferimento: la copertina online è stata confermata.
                     if session.isCurrentConfirmed {
@@ -417,6 +540,10 @@ struct FixArtworkView: View {
                         Text(t("fix_artwork_save_failed"))
                             .font(.caption).foregroundStyle(.red)
                     }
+                    if session.manualAddFailed {
+                        Text(t("fix_artwork_drop_failed"))
+                            .font(.caption).foregroundStyle(.red)
+                    }
 
                     Spacer(minLength: 12)
 
@@ -429,6 +556,11 @@ struct FixArtworkView: View {
                             .buttonStyle(.flatRoomy)
                             .disabled(!session.canGoNext)
                             .help(t("fix_artwork_ignore_help"))
+                        Button { session.revert() } label: { Image(systemName: "arrow.uturn.backward").frame(width: 16) }
+                            .buttonStyle(.flatRoomy)
+                            .disabled(!session.canRevert)
+                            .help(t("fix_artwork_revert_help"))
+                            .accessibilityLabel(t("fix_artwork_revert_help"))
                     }
                 }
                 .padding(.top, 22)
@@ -452,7 +584,7 @@ struct FixArtworkView: View {
 
                 Button {
                     if session.needsOKWarning { showOKWarning = true } else { session.accept() }
-                } label: { Text(t("button_ok")).frame(width: textButtonWidth) }
+                } label: { Text(t("button_done")).frame(width: textButtonWidth) }
                 .buttonStyle(.flatProminentRoomy)
                 .keyboardShortcut(.defaultAction)
             }
@@ -487,6 +619,20 @@ struct FixArtworkView: View {
                 promptCard(title: t("alert_fix_ok_title"), message: okWarningMessage,
                            primary: (t("button_continue"), { showOKWarning = false; session.accept() }),
                            secondary: (t("button_back"), { showOKWarning = false }))
+            } else if let revertPrompt = session.revertPrompt {
+                promptCard(title: t("alert_fix_revert_title"),
+                           message: revertPrompt.tracks.count <= 1
+                               ? t("alert_fix_revert_message_one")
+                               : t("alert_fix_revert_message", revertPrompt.tracks.count, revertPrompt.album),
+                           primary: (t("button_confirm"), { session.applyRevert() }),
+                           secondary: (t("button_cancel"), { session.cancelRevert() }))
+            } else if let ignorePrompt = session.ignorePrompt {
+                promptCard(title: t("alert_fix_ignore_title"),
+                           message: ignorePrompt.tracks.count == 1
+                               ? t("alert_fix_ignore_message_one", ignorePrompt.album)
+                               : t("alert_fix_ignore_message", ignorePrompt.tracks.count, ignorePrompt.album),
+                           primary: (t("button_yes"), { session.applyIgnoreToAlbum() }),
+                           secondary: (t("button_no"), { session.declineIgnoreAlbum() }))
             } else if session.albumPrompt != nil {
                 promptCard(title: t("alert_fix_album_title"),
                            message: (session.albumPrompt?.tracks.count ?? 0) == 1
@@ -610,7 +756,55 @@ struct FixArtworkView: View {
                 placeholder { placeholderLabel(t("fix_artwork_not_found"), icon: "magnifyingglass") }
             }
         case .notFound:
-            placeholder { placeholderLabel(t("fix_artwork_not_found"), icon: "magnifyingglass") }
+            placeholder {
+                VStack(spacing: 6) {
+                    placeholderLabel(t("fix_artwork_not_found"), icon: "magnifyingglass")
+                    Text(t("fix_artwork_drop_hint")).font(.caption2).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center).padding(.horizontal, 10)
+                }
+            }
+        }
+    }
+
+    /// Immagine trascinata sulla copertina online: file del Finder, immagine di Safari (o di un'altra app), oppure un indirizzo web
+    /// di un'immagine (che si scarica).
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        let session = self.session
+        let deliver: @Sendable (Data) -> Void = { data in Task { @MainActor in session.addManualCover(data) } }
+        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                var url: URL?
+                if let u = item as? URL { url = u } else if let d = item as? Data { url = URL(dataRepresentation: d, relativeTo: nil) }
+                if let url, let data = try? Data(contentsOf: url) { deliver(data) }
+            }
+            return true
+        }
+        if provider.canLoadObject(ofClass: NSImage.self) {
+            _ = provider.loadObject(ofClass: NSImage.self) { object, _ in
+                if let image = object as? NSImage, let tiff = image.tiffRepresentation { deliver(tiff) }
+            }
+            return true
+        }
+        if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, url.scheme?.hasPrefix("http") == true else { return }
+                URLSession.shared.dataTask(with: url) { data, _, _ in if let data { deliver(data) } }.resume()
+            }
+            return true
+        }
+        return false
+    }
+
+    /// ⌘V: usa l'immagine (o il file immagine) che si trova negli appunti.
+    private func pasteCover() {
+        let pasteboard = NSPasteboard.general
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           let url = urls.first, let data = try? Data(contentsOf: url) {
+            session.addManualCover(data)
+        } else if let images = pasteboard.readObjects(forClasses: [NSImage.self]) as? [NSImage],
+                  let tiff = images.first?.tiffRepresentation {
+            session.addManualCover(tiff)
         }
     }
 
@@ -633,5 +827,27 @@ struct FixArtworkView: View {
             Text(text).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
         .padding(8)
+    }
+}
+
+
+extension LocalTrack {
+    /// «Proprietario» dell'album per Fix Artwork (2.3 Beta 3): compilation = un unico proprietario; altrimenti l'artista dell'album e, se
+    /// manca, l'artista del brano senza gli ospiti («Earth, Wind & Fire Feat. The Emotions» → «Earth, Wind & Fire»). Così un brano con un
+    /// ospite resta nel suo album anche quando il tag «artista dell'album» non c'è.
+    var albumOwner: String {
+        if isCompilation { return "\u{1}compilation" }
+        let albumArtistName = albumArtist.trimmingCharacters(in: .whitespaces)
+        return albumArtistName.isEmpty ? Self.withoutGuests(artist) : albumArtistName
+    }
+
+    /// Nome dell'artista senza la parte degli ospiti («feat.», «featuring», «ft.»).
+    static func withoutGuests(_ name: String) -> String {
+        var cut = name.endIndex
+        for marker in [" feat.", " feat ", " featuring ", " ft.", " ft ", "(feat", "[feat", "(ft.", "[ft."] {
+            if let r = name.range(of: marker, options: .caseInsensitive), r.lowerBound < cut { cut = r.lowerBound }
+        }
+        let base = name[..<cut].trimmingCharacters(in: .whitespaces)
+        return base.isEmpty ? name : base
     }
 }

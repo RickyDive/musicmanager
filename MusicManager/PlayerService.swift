@@ -303,6 +303,7 @@ final class PlayerService: NSObject, ObservableObject {
             MPMediaItemPropertyTitle: title,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
             MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
+            MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue
         ]
         if let nowArtist, !nowArtist.isEmpty { info[MPMediaItemPropertyArtist] = nowArtist }
@@ -318,36 +319,35 @@ final class PlayerService: NSObject, ObservableObject {
     }
 
     /// Tasti multimediali, Centro di Controllo e comandi dell'Apple TV: play, pausa, avanti, indietro, posizione.
+    /// 2.3 Beta 3: ogni comando è abilitato (`isEnabled`) perché il ricevitore AirPlay mostri i controlli, e ogni comando
+    /// arrivato si scrive nel log dettagliato, per vedere se l'Apple TV li invia davvero.
     private func setupRemoteCommands() {
         let center = MPRemoteCommandCenter.shared()
-        center.playCommand.addTarget { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.currentItem != nil, !self.isPlaying else { return }
-                self.togglePlayPause()
+        func register(_ command: MPRemoteCommand, _ name: String, _ action: @escaping @MainActor (PlayerService) -> Void) {
+            command.isEnabled = true
+            command.addTarget { [weak self] _ in
+                AppLog.debug("In riproduzione: comando ricevuto — \(name)")
+                Task { @MainActor in if let self { action(self) } }
+                return .success
             }
-            return .success
         }
-        center.pauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.currentItem != nil, self.isPlaying else { return }
-                self.togglePlayPause()
-            }
-            return .success
+        register(center.playCommand, "play") { player in
+            if player.currentItem != nil, !player.isPlaying { player.togglePlayPause() }
         }
-        center.togglePlayPauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.togglePlayPause() }
-            return .success
+        register(center.pauseCommand, "pausa") { player in
+            if player.currentItem != nil, player.isPlaying { player.togglePlayPause() }
         }
-        center.nextTrackCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.onNext?() }
-            return .success
-        }
-        center.previousTrackCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.onPrevious?() }
-            return .success
-        }
+        register(center.togglePlayPauseCommand, "play/pausa") { $0.togglePlayPause() }
+        register(center.nextTrackCommand, "avanti") { $0.onNext?() }
+        register(center.previousTrackCommand, "indietro") { $0.onPrevious?() }
+        // Salti a tempo (±15 s): l'Apple TV, con l'audio AirPlay, non li invia (prova del 30/10): disattivati, così il
+        // ricevitore mostra i soli comandi avanti/indietro di brano.
+        center.skipForwardCommand.isEnabled = false
+        center.skipBackwardCommand.isEnabled = false
+        center.changePlaybackPositionCommand.isEnabled = true
         center.changePlaybackPositionCommand.addTarget { [weak self] event in
             guard let position = (event as? MPChangePlaybackPositionCommandEvent)?.positionTime else { return .commandFailed }
+            AppLog.debug("In riproduzione: comando ricevuto — posizione \(position)")
             Task { @MainActor in self?.seek(to: position) }
             return .success
         }

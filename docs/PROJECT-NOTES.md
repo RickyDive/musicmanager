@@ -96,7 +96,7 @@ All code is in `MusicManager/` (~19.7k lines of Swift). Rule of the project: **n
 
 Scripts (`Scripts/`): `bundle-libs.sh` (copies libmtp/libusb into the bundle, lowers their minimum macOS to 26.0 with `vtool`, signs), `verify-bundle.sh`, `build-release.sh` (DMG + `.sha256`), `diagnose-launch.sh`, `make-test-volume.sh`.
 
-Application data: `~/Library/Application Support/MusicManager/` (`Devices/Images`, `Devices/DeviceXML/<Global ID>/GarminDevice.xml` + `Maps.json`, `Artwork/…`, `External Library/…`) and `~/Music/MusicManager/` (`TEMP`, `Custom Lib`). Older folders named `GarminMusicManager` are migrated at first launch.
+Application data: `~/Library/Application Support/MusicManager/` (`Devices/Images`, `Devices/DeviceXML/<Global ID>/GarminDevice.xml` + `Maps.json`, `Cache/…` (`ConfirmedArtwork`, `ArtistsMiniature`; formerly `Artwork/`), `External Library/…`) and `~/Music/MusicManager/` (`TEMP`, `Custom Lib`). Older folders named `GarminMusicManager` are migrated at first launch.
 
 ## 5. The storage bar and what sits on the watch
 

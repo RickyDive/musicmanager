@@ -318,12 +318,25 @@ final class AppSettings: ObservableObject {
         var points: CGFloat {
             switch self {
             case .extraSmall: return 10
-            case .small: return 11.5
-            case .medium: return 13
-            case .large: return 14.5
-            case .extraLarge: return 16
+            case .small: return 11
+            case .medium: return 12
+            case .large: return 13
+            case .extraLarge: return 13.5
             }
         }
+        /// 2.3 Beta 3: corpo della seconda riga (sottotitoli), scalato con la prima. A «Medio» 10 pt (come `.caption`); valori scelti dall’utente dopo la prova.
+        /// Le coppie sono scelte perché la somma delle due righe stia nei 32 pt della copertina.
+        var secondaryPoints: CGFloat {
+            switch self {
+            case .extraSmall: return 8.5
+            case .small: return 9
+            case .medium: return 10
+            case .large: return 11
+            case .extraLarge: return 11.5
+            }
+        }
+        /// Spazio tra le due righe (la somma dei corpi, al massimo 14 + 11 pt, sta nei 32 pt della copertina).
+        var lineSpacing: CGFloat { 2 }
     }
 
     @Published var listTextSize: ListTextSize {

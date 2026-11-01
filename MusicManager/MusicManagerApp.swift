@@ -12,14 +12,10 @@ struct MusicManagerApp: App {
 
     /// Osserva la lingua: al cambio il corpo dell'app si rivaluta e i menu personalizzati e i titoli delle finestre si aggiornano.
     @ObservedObject private var loc = LocalizationManager.shared
-    /// Colore dell'interfaccia (2.3 Beta 2): il corpo si rivaluta quando cambia l'opzione o il colore di selezione.
-    @ObservedObject private var appSettings = AppSettings.shared
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .buttonStyle(.flat)
-                .tint(appSettings.interfaceTint)
+            TintedRoot { ContentView().buttonStyle(.flat) }
         }
         // All'apertura la finestra ha sempre la dimensione minima necessaria a mostrare tutto il contenuto
         // (né a tutto schermo né una misura salvata troppo piccola): non si ripristina il frame precedente.
@@ -44,13 +40,20 @@ struct MusicManagerApp: App {
         .defaultLaunchBehavior(.suppressed)
         // macOS aggiunge da solo la voce "Impostazioni…" (⌘,) nel menu dell'app per questa scena.
         Settings {
-            SettingsView()
-                .buttonStyle(.flat)
-                .tint(appSettings.interfaceTint)
+            TintedRoot { SettingsView().buttonStyle(.flat) }
         }
     }
 }
 
+
+/// Applica l'accento dell'interfaccia (2.3 Beta 3). È una vista a parte, non il corpo dell'app: quando l'accento
+/// cambia (anche trascinando la tonalità) si ridisegna solo questa vista e SwiftUI non ricostruisce la barra dei
+/// menu, quindi la voce «Modifica/Formato» non riappare a scatti.
+struct TintedRoot<Content: View>: View {
+    @ObservedObject private var settings = AppSettings.shared
+    @ViewBuilder let content: () -> Content
+    var body: some View { content().tint(settings.interfaceTint) }
+}
 
 /// Stato minimo che i menu devono osservare (2.1 Beta 3). Prima i menu osservavano l'intero view model
 /// (`@FocusedObject`): a ogni suo cambiamento (decine al secondo durante la preparazione dei brani da inviare)

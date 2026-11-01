@@ -29,7 +29,7 @@ enum ArtworkCache {
     /// «Online Artwork» invece che «Garmin Cache» (che resta per quelle confermate in sessioni precedenti). Solo in memoria.
     nonisolated(unsafe) static var chosenOnlineThisSession = Set<String>()
 
-    /// `Application Support/MusicManager/Artwork` (vedi `AppFolders`).
+    /// `Application Support/MusicManager/Cache` (vedi `AppFolders`; fino alla 2.3 Beta 2 era `Artwork`).
     private static var baseDirectory: URL { AppFolders.artwork }
 
     private static var directory: URL {
@@ -71,6 +71,32 @@ enum ArtworkCache {
     /// copie di quelle di Musica. Una sola lettura dell'indice: serve a decidere in fretta quali brani mostrare con la copertina scelta.
     static func chosenKeys() -> Set<String> {
         Set(loadIndex().filter { $0.value.fromApple != true }.keys)
+    }
+
+    /// Vero se per la chiave c'è una copertina scelta dall'utente (non una semplice copia di quella di Musica).
+    static func isChosen(key: String) -> Bool {
+        guard let entry = loadIndex()[key] else { return false }
+        return entry.fromApple != true
+    }
+
+    /// «Revert» di Fix Artwork (2.3 Beta 3): toglie dall'archivio le copertine scelte per queste chiavi (voce e immagine), così i brani
+    /// tornano a usare quella di Musica o, se Musica non ne ha, restano senza. Le voci copiate da Musica non si toccano. Nulla cambia
+    /// sul dispositivo: un file già inviato con la copertina scelta la tiene finché il brano non viene reinviato.
+    @discardableResult
+    static func removeChosen(keys: [String]) -> Bool {
+        var index = loadIndex()
+        var changed = false
+        for key in keys {
+            guard let entry = index[key], entry.fromApple != true else { continue }
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(entry.imageFileName))
+            index[key] = nil
+            chosenOnlineThisSession.remove(key)
+            changed = true
+        }
+        guard changed else { return true }
+        let saved = saveIndex(index)
+        NotificationCenter.default.post(name: didChangeChosenNotification, object: nil)
+        return saved
     }
 
     static func isPushedToDevice(key: String) -> Bool {

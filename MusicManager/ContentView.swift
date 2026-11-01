@@ -478,6 +478,7 @@ struct ContentView: View {
         .externalReveal($vm.externalReveal)
         .genreFilter()
         .typeAheadFirstLetterOnly(vm.externalLibraryName != nil)   // librerie remote / unità esterne: solo la prima lettera
+        .artistThumbnailDownload(vm.externalLibraryName == nil)   // miniature artisti: ricerca online solo con la libreria locale
         .toolbarSearch($vm.musicSearch, custom: $vm.customPlaylistSearch)
         .onRequestArtwork { vm.loadMissingArtwork(for: $0, manual: $1) }
         .onCoverFilterCount { vm.coverFilterCount = $0 }
@@ -1339,7 +1340,7 @@ struct ContentView: View {
     }
 
     private var deviceMusicView: CatalogBrowser<DeviceTrack> {
-        CatalogBrowser(tracks: vm.deviceTracks,
+        let base = CatalogBrowser(tracks: vm.deviceTracks,
                        playlists: vm.devicePlaylists,
                        category: $vm.deviceCategory,
                        selection: $vm.selectedDeviceTrackIDs,
@@ -1354,6 +1355,12 @@ struct ContentView: View {
         .onEditPlaylist { vm.editDevicePlaylistInCustom($0) }
         // Dispositivo senza musica: schede, ricerca, memoria e ricarica disattivate.
         .controlsDisabled(vm.isDeviceReadOnly)
+        // 2.3 Beta 3: icona «il brano è in una playlist del dispositivo» (colonna vuota per gli altri brani) con balloon immediato che
+        // elenca le playlist. Solo se sul dispositivo c'è almeno una playlist (altrimenti la colonna resterebbe sempre vuota).
+        guard !vm.devicePlaylists.isEmpty else { return base }
+        return base
+            .onPlaylistMembership { vm.devicePlaylistsContaining($0) }
+            .instantMembershipBalloon()
     }
 
     // MARK: - Centro notifiche (barra del titolo)
@@ -1843,13 +1850,12 @@ struct UpdateCapsuleView: View {
     static let available = Color(red: 0.937, green: 0.604, blue: 0.604)  // rosso pallido #EF9A9A
     static let checkNeeded = Color(red: 0.98, green: 0.80, blue: 0.46)   // ambra pallido: controllo da rifare
 
-    @Environment(\.colorScheme) private var colorScheme
-    /// Build 46: in modo scuro le capsule «Software Updated» / «Map Updated» (e «Upgrade Available», in rosso, e «Check Needed», in ambra) hanno testo bianco (su un verde più profondo, per restare leggibili).
-    private var whiteOnGreen: Bool { colorScheme == .dark && color == Self.upToDate }
+    /// Build 47: in ogni tema (chiaro e scuro) le capsule «Software Updated» / «Map Updated» (e «Upgrade Available», in rosso, e «Check Needed», in ambra) hanno testo bianco (su un verde più profondo, per restare leggibili).
+    private var whiteOnGreen: Bool { color == Self.upToDate }
     /// Idem per «Upgrade Available» (rosso più profondo).
-    private var whiteOnRed: Bool { colorScheme == .dark && color == Self.available }
+    private var whiteOnRed: Bool { color == Self.available }
     /// Idem per «Check Needed» (ambra più scuro).
-    private var whiteOnAmber: Bool { colorScheme == .dark && color == Self.checkNeeded }
+    private var whiteOnAmber: Bool { color == Self.checkNeeded }
 
     var body: some View {
         Text(text)
@@ -1937,6 +1943,10 @@ private struct DeviceUpdateSheet: View {
 /// Colori delle icone di stato (globo, spunta/croce del software): verde scuro = a posto, rosso = da aggiornare.
 let statusIconGreen = Color(red: 0.18, green: 0.58, blue: 0.28)
 let statusIconRed = Color(red: 0.86, green: 0.24, blue: 0.24)
+/// Diametro dei pallini di stato in Impostazioni (dispositivo collegato, reti condivise, dischi): come il disegno del globo mappe.
+let statusDotSize: CGFloat = 12
+/// Verde del globo delle mappe: lo stesso (più profondo) della capsula «Software Updated» / «Map Updated».
+let mapsGlobeGreen = Color(red: 0.18, green: 0.58, blue: 0.28)
 
 /// Colore del globo delle mappe: rosso se c'è una mappa da aggiornare o l'ultimo controllo ha oltre `mapsRecheckDays`
 /// giorni, verde (scuro) se è tutto aggiornato e il controllo è recente, grigio se non ci sono dati.
@@ -1945,7 +1955,7 @@ func mapsGlobeColor(catalog: GarminMapsCatalog?, checkedAt: Date?) -> Color {
     guard let catalog, let checkedAt else { return .secondary }
     let days = Calendar.current.dateComponents([.day], from: checkedAt, to: Date()).day ?? 0
     let stale = days > AppSettings.mapsRecheckDays
-    return (catalog.hasUpdates || stale) ? statusIconRed : statusIconGreen
+    return (catalog.hasUpdates || stale) ? statusIconRed : mapsGlobeGreen
 }
 
 /// «Checked Today» / «Checked 78 days ago» a partire dalla data del controllo delle mappe.

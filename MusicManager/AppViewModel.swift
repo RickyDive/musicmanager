@@ -548,7 +548,7 @@ final class AppViewModel: ObservableObject {
         didSet { rebuildDeviceFileIndex(); updatePendingTransferBytes(); deviceSummaryCache = nil }
     }
     @Published var devicePlaylists: [TrackGroup<DeviceTrack>] = [] {
-        didSet { devicePlaylistNames = Set(devicePlaylists.map { $0.title.lowercased() }) }
+        didSet { devicePlaylistNames = Set(devicePlaylists.map { $0.title.lowercased() }); rebuildDeviceMembership() }
     }
     /// Nomi (minuscoli) delle playlist presenti sul dispositivo, per l'icona "già inviata".
     private var devicePlaylistNames: Set<String> = []
@@ -578,6 +578,26 @@ final class AppViewModel: ObservableObject {
         for key in index.keys { index[key]?.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending } }
         playlistMembership = index
     }
+    /// 2.3 Beta 3: indice «ID brano del dispositivo → playlist del dispositivo che lo contengono (id, titolo)», ricostruito a ogni cambio
+    /// delle playlist del dispositivo (quindi anche dopo invii, eliminazioni e riscritture, che rileggono il catalogo). Serve all'icona
+    /// «in playlist» del pannello dispositivo.
+    private var deviceMembership: [UInt32: [(id: String, title: String)]] = [:]
+    private func rebuildDeviceMembership() {
+        var index: [UInt32: [(id: String, title: String)]] = [:]
+        for group in devicePlaylists {
+            var seen = Set<UInt32>()
+            for track in group.tracks where seen.insert(track.id).inserted {
+                index[track.id, default: []].append((id: group.id, title: group.title))
+            }
+        }
+        for key in index.keys { index[key]?.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending } }
+        deviceMembership = index
+    }
+    /// Playlist del dispositivo (id, titolo) che contengono il brano; vuoto se non sta in nessuna.
+    func devicePlaylistsContaining(_ track: DeviceTrack) -> [(id: String, title: String)] {
+        deviceMembership[track.id] ?? []
+    }
+
     // MARK: - Trova simili
 
     /// Finestra «Trova simili» aperta (nil = chiusa).
@@ -2237,6 +2257,15 @@ final class AppViewModel: ObservableObject {
         return (nil, .none)
     }
 
+    /// Fix Artwork ha mostrato la copertina di Music di un brano che negli elenchi non ne ha ancora una (caricamento automatico
+    /// spento, o brano mai caricato): la si memorizza e si aggiornano gli elenchi. Non tocca i brani con una copertina scelta.
+    private func showMusicCoverInList(_ track: LocalTrack, data: Data, origin: ArtworkOrigin) async {
+        guard !hasArtworkAlready(track),
+              !ArtworkCache.isChosen(key: ArtworkCache.key(artist: track.artist, title: track.title, album: track.album)) else { return }
+        await remember(track, data: data, origin: origin)
+        artworkRevision += 1   // azzera anche le origini memorizzate: l'elenco rilegge la miniatura
+    }
+
     /// Conserva (come miniatura) una copertina letta da Musica, per non rileggerla scorrendo gli elenchi.
     private func remember(_ track: LocalTrack, data: Data, origin: ArtworkOrigin) async {
         let key = storeKey(track)
@@ -3135,11 +3164,11 @@ final class AppViewModel: ObservableObject {
             for list in playlists {
                 let paths = list.tracks.compactMap { relativeByTrack[$0.id] }
                 guard !paths.isEmpty else { continue }
-                let fileURL = base.appendingPathComponent("\(Self.sanitizedFilename(list.name)).m3u8")
+                let fileURL = base.appendingPathComponent("\(Self.sanitizedFilename(list.name)).\(deviceMedia?.playlistFileExtension ?? "m3u8")")
                 try (paths.joined(separator: "\r\n") + "\r\n").write(to: fileURL, atomically: true, encoding: .utf8)
             }
         } else if let playlistName, !relativePaths.isEmpty {
-            let fileURL = base.appendingPathComponent("\(Self.sanitizedFilename(playlistName)).m3u8")
+            let fileURL = base.appendingPathComponent("\(Self.sanitizedFilename(playlistName)).\(deviceMedia?.playlistFileExtension ?? "m3u8")")
             let content = relativePaths.joined(separator: "\r\n") + "\r\n"
             try content.write(to: fileURL, atomically: true, encoding: .utf8)
         }
@@ -3275,9 +3304,18 @@ final class AppViewModel: ObservableObject {
     func startFixArtwork(for override: [LocalTrack]? = nil, then followUp: (() -> Void)? = nil) {
         guard ensureDeviceWritable() else { return }
         let selected = override ?? tracks.filter { selectedTrackIDs.contains($0.id) }
-        let eligible = selected.filter { track in
+        var eligible = selected.filter { track in
             guard track.isTransferable, let ext = track.url?.pathExtension.lowercased() else { return false }
             return ext == "m4a" || ext == "aac"
+        }
+        // 2.3 Beta 3: i brani si propongono nell'ordine degli elenchi: artista dell'album, album in ordine alfabetico, poi disco e traccia
+        // (prima arrivavano nell'ordine della selezione, mescolando gli album).
+        eligible.sort { a, b in
+            let o = a.albumOwner.localizedCaseInsensitiveCompare(b.albumOwner)
+            if o != .orderedSame { return o == .orderedAscending }
+            let al = a.album.localizedCaseInsensitiveCompare(b.album)
+            if al != .orderedSame { return al == .orderedAscending }
+            return inAlbumOrder(a, b)
         }
         guard !eligible.isEmpty else {
             status = t("status_fix_artwork_none_eligible")
@@ -3291,29 +3329,54 @@ final class AppViewModel: ObservableObject {
         fixArtworkSession = FixArtworkSession(
             tracks: eligible,
             // "Artwork originale": quella vera, non una già confermata (vedi `originalArtwork`).
-            fetchOriginal: { [weak self] track in await self?.originalArtwork(for: track) },
+            // 2.3 Beta 3: se il brano non ha una copertina propria si mostra quella che l'elenco mostra per il suo album (di un altro
+            // brano o della cache di Musica), come «Originale»; prima la colonna restava vuota anche con l'album coperto negli elenchi.
+            fetchOriginal: { [weak self] track in
+                guard let self else { return nil }
+                // 2.3 Beta 3: la copertina di Music mostrata qui compare anche nell'elenco (anche con il caricamento automatico spento).
+                if let own = await self.originalArtwork(for: track) {
+                    await self.showMusicCoverInList(track, data: own, origin: .own)
+                    return own
+                }
+                if let album = await self.albumArtwork(for: track) {
+                    await self.showMusicCoverInList(track, data: album, origin: .musicCache)
+                    return album
+                }
+                return nil
+            },
             fetchOnline: { track in
                 await lookup.search(artist: track.artist, title: track.title, durationSeconds: track.duration, album: track.album)
             },
             // Dopo ogni "Confirm": gli elenchi ricaricano le miniature, cosi la copertina nuova
             // compare subito sul brano e sull'album.
             onConfirmed: { [weak self] in self?.artworkRevision += 1 },
-            // Altri brani dello stesso album (e artista), AAC/M4A, senza copertina propria né confermata:
-            // dopo il «Confirm» si propone di dare loro la stessa copertina.
+            // Altri brani dello stesso album (e artista), AAC/M4A, senza copertina già confermata: dopo il «Confirm» si propone di dare
+            // loro la stessa copertina. 2.3 Beta 3: contano anche i brani che hanno già una copertina (propria o presa dall'album negli
+            // elenchi), perché l'uso tipico è sostituire quella dell'album con una migliore; prima i brani con la copertina «in prestito»
+            // dall'album venivano esclusi (di «I Am» se ne proponeva 1 su 8). Restano fuori solo quelli con una copertina già scelta.
             siblings: { [weak self] track in
                 guard let self else { return [] }
                 // Stesso album = stesso titolo e stesso artista DELL'ALBUM (se manca, quello del brano): un brano con ospiti
                 // («Earth, Wind & Fire Feat. The Emotions») resta nell'album, e le compilation con artisti diversi si riconoscono.
                 // Compilation (tag): un unico «proprietario», altrimenti ogni brano di artista diverso resterebbe fuori dall'album.
-                func albumOwner(_ t: LocalTrack) -> String { t.isCompilation ? "\u{1}compilation" : (t.albumArtist.isEmpty ? t.artist : t.albumArtist) }
-                return self.tracks.filter { other in
+                let candidates = self.tracks.filter { other in
                     guard other.id != track.id, other.isTransferable,
                           other.album.caseInsensitiveCompare(track.album) == .orderedSame,
-                          albumOwner(other).caseInsensitiveCompare(albumOwner(track)) == .orderedSame,
+                          other.albumOwner.caseInsensitiveCompare(track.albumOwner) == .orderedSame,
                           let ext = other.url?.pathExtension.lowercased(), ext == "m4a" || ext == "aac"
                     else { return false }
                     let key = ArtworkCache.key(artist: other.artist, title: other.title, album: other.album)
-                    return ArtworkCache.confirmedImage(forKey: key) == nil && !self.hasArtworkAlready(other)
+                    return ArtworkCache.confirmedImage(forKey: key) == nil
+                }
+                return candidates
+            },
+            // «Revert»: brani dello stesso album (stessa regola di `siblings`) che hanno una copertina scelta, compreso quello dato.
+            albumChosen: { [weak self] track in
+                guard let self else { return [] }
+                return self.tracks.filter { other in
+                    other.album.caseInsensitiveCompare(track.album) == .orderedSame
+                        && other.albumOwner.caseInsensitiveCompare(track.albumOwner) == .orderedSame
+                        && ArtworkCache.isChosen(key: ArtworkCache.key(artist: other.artist, title: other.title, album: other.album))
                 }
             },
             onFinish: { [weak self] confirmedCount in
@@ -3540,6 +3603,10 @@ final class AppViewModel: ObservableObject {
             deviceMedia = media
             LocalTrack.deviceExtensions = media.flatMap { $0.isMusicCapable ? $0.trackExtensions : nil }
             await mtp.setWriteLocked(media?.isMusicCapable == false)
+            // 2.3 Beta 3: file playlist `.m3u8` (come sempre) o `.m3u` per i dispositivi che dichiarano solo M3U.
+            let playlistExt = media?.playlistFileExtension ?? "m3u8"
+            await mtp.setPlaylistExtension(playlistExt)
+            if playlistExt != "m3u8" { AppLog.write("Dispositivo: dichiara solo playlist «.\(playlistExt)»: i file playlist si scrivono come .\(playlistExt)") }
             objectWillChange.send()   // i brani «inviabili» dipendono dai formati appena letti
             // Global ID noto: carica (o crea) le impostazioni specifiche di questo dispositivo.
             if let id = model.id, !id.isEmpty {

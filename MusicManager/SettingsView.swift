@@ -82,7 +82,7 @@ struct SettingsView: View {
                             Text(t(item.key)).font(.caption)
                         }
                         .frame(width: 86, height: 46)
-                        .background(pane == item ? settings.accentColor.opacity(0.22) : Color.clear,
+                        .background(pane == item ? settings.highlightColor : Color.clear,
                                     in: RoundedRectangle(cornerRadius: 8))
                         .contentShape(Rectangle())
                     }
@@ -260,6 +260,14 @@ struct SettingsView: View {
 
     /// Un album a caso della libreria Apple Music con la copertina disponibile, scelto all'apertura delle Impostazioni.
     @State private var previewAlbum: (title: String, artist: String, cover: NSImage)?
+    /// Valore dell'opacità finestra mentre si trascina il cursore (nil = nessun trascinamento): solo anteprima, vedi `onFinish`.
+    @State private var opacityDraft: Double?
+    /// Dimensione del testo mentre si trascina il cursore (nil = nessun trascinamento): solo anteprima, si applica al rilascio.
+    @State private var textSizeDraft: Int?
+    /// Dimensione mostrata dall'anteprima e dalle etichette: la bozza durante il trascinamento, altrimenti quella applicata.
+    private var shownTextSize: AppSettings.ListTextSize {
+        textSizeDraft.flatMap { AppSettings.ListTextSize(rawValue: $0) } ?? settings.listTextSize
+    }
 
     /// Anteprima della dimensione del testo: la riga di un album come nell'elenco (copertina, titolo alla dimensione scelta
     /// e sottotitolo secondario). Senza libreria o copertine, una riga di esempio con un'icona.
@@ -277,11 +285,11 @@ struct SettingsView: View {
             }
             .frame(width: 32, height: 32)
             .clipShape(RoundedRectangle(cornerRadius: 32 * 0.18))
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: shownTextSize.lineSpacing) {
                 Text(previewAlbum?.title ?? t("settings_text_size_sample"))
-                    .font(.system(size: settings.listTextSize.points)).fontWeight(.medium).lineLimit(1)
+                    .font(.system(size: shownTextSize.points)).fontWeight(.medium).lineLimit(1)
                 Text(previewAlbum?.artist ?? "")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.system(size: shownTextSize.secondaryPoints)).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .frame(width: previewSize.width, height: previewSize.height, alignment: .leading)
@@ -318,7 +326,7 @@ struct SettingsView: View {
             .offset(x: 60, y: 12)
             // Gli stessi strati della finestra principale.
             Rectangle().fill(.ultraThinMaterial)
-            Rectangle().fill(Color(nsColor: .windowBackgroundColor).opacity(settings.windowOpacity))
+            Rectangle().fill(Color(nsColor: .windowBackgroundColor).opacity(opacityDraft ?? settings.windowOpacity))
             // Barra di controlli: pulsanti piatti (condividi / altro) e un campo di ricerca.
             HStack(spacing: 6) {
                 HStack(spacing: 10) {
@@ -407,16 +415,19 @@ struct SettingsView: View {
                         let inset: CGFloat = 8
                         let span = max(geo.size.width - 2 * inset, 1)
                         NativeSlider(value: Binding(
-                            get: { Double(settings.listTextSize.rawValue) },
-                            set: { settings.listTextSize = AppSettings.ListTextSize(rawValue: Int($0.rounded())) ?? .medium }
-                        ), range: 0...4, tickMarks: 5)
+                            get: { Double(shownTextSize.rawValue) },
+                            set: { textSizeDraft = Int($0.rounded()) }   // solo anteprima durante il trascinamento
+                        ), range: 0...4, tickMarks: 5, onFinish: { final in
+                            settings.listTextSize = AppSettings.ListTextSize(rawValue: Int(final.rounded())) ?? .medium
+                            textSizeDraft = nil
+                        })
                         .frame(width: geo.size.width, height: 22)
                         .position(x: geo.size.width / 2, y: geo.size.height / 2)
                         ForEach([(0, "settings_text_size_xs"), (2, "settings_text_size_medium"), (4, "settings_text_size_large")], id: \.0) { item in
                             Text(t(item.1))
                                 .font(.caption)
                                 .fixedSize()
-                                .foregroundStyle(item.0 == settings.listTextSize.rawValue ? Color.primary : Color.secondary)
+                                .foregroundStyle(item.0 == shownTextSize.rawValue ? Color.primary : Color.secondary)
                                 .position(x: inset + span * CGFloat(item.0) / 4, y: geo.size.height / 2 + 22)
                         }
                     }
@@ -435,10 +446,15 @@ struct SettingsView: View {
                     opacityPreview
                     GeometryReader { geo in
                         let inset: CGFloat = 8
+                        // 2.3 Beta 3: durante il trascinamento cambia solo l'anteprima qui accanto; l'opacità della finestra (e il
+                        // salvataggio) si applicano al rilascio. Prima ogni passo ridisegnava l'intera interfaccia e riscriveva il profilo.
                         NativeSlider(value: Binding(
-                            get: { settings.windowOpacity },
-                            set: { settings.windowOpacity = ($0 * 20).rounded() / 20 }   // passi del 5 %, senza trattini
-                        ), range: 0...1, tickMarks: 0)
+                            get: { opacityDraft ?? settings.windowOpacity },
+                            set: { opacityDraft = ($0 * 20).rounded() / 20 }   // passi del 5 %, senza trattini
+                        ), range: 0...1, tickMarks: 0, onFinish: { final in
+                            settings.windowOpacity = (final * 20).rounded() / 20
+                            opacityDraft = nil
+                        })
                         .frame(width: geo.size.width, height: 22)
                         .position(x: geo.size.width / 2, y: geo.size.height / 2)
                         Image(systemName: "capsule.on.rectangle.liquid.glass")
@@ -717,7 +733,7 @@ struct SettingsView: View {
                         ZStack {
                             Color.clear
                             if settings.connectedDeviceIDs.contains(device.id) {
-                                Circle().fill(statusIconGreen).frame(width: 9, height: 9)
+                                Circle().fill(statusIconGreen).frame(width: statusDotSize, height: statusDotSize)
                                     .help(t("device_connected_help"))
                             }
                         }
@@ -764,6 +780,8 @@ struct SettingsView: View {
                             Text(device.softwareVersion.isEmpty ? "—" : device.softwareVersion).lineLimit(1)
                             if let ok = device.softwareUpToDate {
                                 Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                    .font(.system(size: 14))
+                                    .frame(height: 16)   // più grande, senza aumentare l'altezza della riga
                                     .symbolRenderingMode(.palette)
                                     .foregroundStyle(Color.white, ok ? statusIconGreen : statusIconRed)
                                     .help(ok ? "Software Updated" : "Upgrade Available")
@@ -914,11 +932,11 @@ struct SettingsView: View {
                                 Color.clear
                                 if !lib.path.isEmpty {
                                     if isMounted {
-                                        Circle().fill(statusIconGreen).frame(width: 9, height: 9)
+                                        Circle().fill(statusIconGreen).frame(width: statusDotSize, height: statusDotSize)
                                     } else if canReach {
-                                        Circle().strokeBorder(statusIconGreen, lineWidth: 1.5).frame(width: 9, height: 9)
+                                        Circle().strokeBorder(statusIconGreen, lineWidth: 1.5).frame(width: statusDotSize, height: statusDotSize)
                                     } else if reach.isUnreachable(lib.id) {
-                                        Circle().fill(statusIconRed).frame(width: 9, height: 9)
+                                        Circle().fill(statusIconRed).frame(width: statusDotSize, height: statusDotSize)
                                     }
                                 }
                             }
@@ -1073,7 +1091,7 @@ struct SettingsView: View {
                         // Pallino verde = unità collegata e cartella raggiungibile; rosso = non disponibile.
                         ZStack {
                             Color.clear
-                            Circle().fill(available ? statusIconGreen : statusIconRed).frame(width: 9, height: 9)
+                            Circle().fill(available ? statusIconGreen : statusIconRed).frame(width: statusDotSize, height: statusDotSize)
                         }
                         .frame(width: deviceConnectedColumnWidth)
                         .help(available ? t("drive_row_info", lib.deviceName, lib.trackCount) : t("drive_err_unavailable", lib.nickname))
@@ -1353,6 +1371,9 @@ private struct NativeSlider: NSViewRepresentable {
     @Binding var value: Double
     let range: ClosedRange<Double>
     var tickMarks: Int = 0
+    /// 2.3 Beta 3: chiamata solo quando il cursore viene rilasciato (o cambiato da tastiera), con il valore finale. Chi la usa può
+    /// aggiornare solo un'anteprima durante il trascinamento (`value`) e applicare il cambiamento all'intera interfaccia qui.
+    var onFinish: ((Double) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -1381,7 +1402,12 @@ private struct NativeSlider: NSViewRepresentable {
     final class Coordinator: NSObject {
         var parent: NativeSlider
         init(_ parent: NativeSlider) { self.parent = parent }
-        @objc func changed(_ sender: NSSlider) { parent.value = sender.doubleValue }
+        @objc func changed(_ sender: NSSlider) {
+            parent.value = sender.doubleValue
+            // Durante il trascinamento l'evento è «mouse premuto/trascinato»; il rilascio (o un tasto) chiude la modifica.
+            let type = NSApp.currentEvent?.type
+            if type != .leftMouseDown && type != .leftMouseDragged { parent.onFinish?(sender.doubleValue) }
+        }
     }
 }
 

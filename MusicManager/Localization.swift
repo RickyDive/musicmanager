@@ -142,8 +142,8 @@ private enum L {
         "settings_text_size_medium": [.it: "Medio", .en: "Medium"],
         "settings_text_size_large": [.it: "Grande", .en: "Large"],
         "settings_text_size_hint": [
-            .it: "Cambia la prima riga di ogni voce: titolo di playlist, artista, album e brano. Le righe secondarie, le icone e i pannelli restano come sono.",
-            .en: "Changes the first line of each item: playlist, artist, album and song titles. Secondary lines, icons and panels stay as they are."
+            .it: "Cambia le due righe di ogni voce: titolo di playlist, artista, album e brano, e il sottotitolo sotto di essi (che segue in proporzione). Le icone e i pannelli restano come sono.",
+            .en: "Changes both lines of each item: playlist, artist, album and song titles, and the subtitle below them (which scales along). Icons and panels stay as they are."
         ],
         "settings_text_size_sample": [
             .it: "Blue in Green", .en: "Blue in Green"
@@ -445,6 +445,7 @@ private enum L {
         "n_without_cover": [
             .it: "%d senza copertina", .en: "%d without cover"
         ],
+        "button_done": [.it: "Fine", .en: "Done"],
         "button_ok": [
             .it: "OK", .en: "OK"
         ],
@@ -1024,9 +1025,6 @@ private enum L {
         "menu_artwork_online_fix": [
             .it: "Fix Artwork online…", .en: "Artwork Online Fix…"
         ],
-        "menu_artwork_reload_apple": [
-            .it: "Ricarica Artwork da Music", .en: "Artwork reload from Music"
-        ],
         "menu_only_without_cover": [
             .it: "Mostra solo brani senza copertina", .en: "Show Only Songs without cover"
         ],
@@ -1500,8 +1498,41 @@ private enum L {
         ],
         "button_ignore": [.it: "Ignora", .en: "Ignore"],
         "fix_artwork_ignore_help": [
-            .it: "Salta tutto l'album di questo brano senza scegliere una copertina",
-            .en: "Skip this song's whole album without choosing a cover"
+            .it: "Non sceglie una copertina per questo brano (se ce ne sono altri dello stesso album, chiede se ignorarli tutti)",
+            .en: "Don't choose a cover for this song (if the album has more songs, asks whether to ignore them all)"
+        ],
+        "fix_artwork_drop_hint": [
+            .it: "Trascina qui un'immagine (da Safari o dal Finder) oppure incollala con ⌘V",
+            .en: "Drop an image here (from Safari or the Finder) or paste it with ⌘V"
+        ],
+        "fix_artwork_drop_failed": [
+            .it: "Immagine non riconosciuta", .en: "Image not recognised"
+        ],
+        "fix_artwork_revert_help": [
+            .it: "Revert: toglie la copertina scelta e torna a quella di Music (o a nessuna copertina se Music non ne ha una)",
+            .en: "Revert: remove the chosen cover and go back to Music's cover (or to no cover if Music has none)"
+        ],
+        "alert_fix_revert_title": [
+            .it: "Tornare alla copertina di Music?", .en: "Go back to Music's cover?"
+        ],
+        "alert_fix_revert_message_one": [
+            .it: "La copertina scelta per questo brano verrà rimossa: tornerà a usare quella di Music, o resterà senza copertina se Music non ne ha una.",
+            .en: "The cover chosen for this song will be removed: it will go back to Music's cover, or have no cover if Music has none."
+        ],
+        "alert_fix_revert_message": [
+            .it: "La copertina scelta verrà rimossa da tutti i %1$d brani dell'album «%2$@»: torneranno a usare quella di Music, o resteranno senza copertina se Music non ne ha una.",
+            .en: "The chosen cover will be removed from all %1$d songs of the album “%2$@”: they will go back to Music's cover, or have no cover if Music has none."
+        ],
+        "alert_fix_ignore_title": [
+            .it: "Ignorare tutto l'album?", .en: "Ignore the whole album?"
+        ],
+        "alert_fix_ignore_message": [
+            .it: "Nell'album «%2$@» ci sono altri %1$d brani da controllare. Vuoi ignorare anche loro?",
+            .en: "The album “%2$@” has %1$d more songs to check. Do you want to ignore them too?"
+        ],
+        "alert_fix_ignore_message_one": [
+            .it: "Nell'album «%@» c'è un altro brano da controllare. Vuoi ignorare anche lui?",
+            .en: "The album “%@” has 1 more song to check. Do you want to ignore it too?"
         ],
         "button_back": [.it: "Indietro", .en: "Back"],
         "alert_fix_ok_title": [
@@ -1527,12 +1558,12 @@ private enum L {
             .it: "Altri brani dello stesso album", .en: "Other songs from the same album"
         ],
         "alert_fix_album_message": [
-            .it: "Nell'album «%2$@» ci sono altri %1$d brani senza copertina. Vuoi usare la stessa copertina anche per loro?",
-            .en: "The album “%2$@” has %1$d more songs without a cover. Do you want to use the same cover for them too?"
+            .it: "Nell'album «%2$@» ci sono altri %1$d brani. Vuoi usare la stessa copertina anche per loro?",
+            .en: "The album “%2$@” has %1$d more songs. Do you want to use the same cover for them too?"
         ],
         "alert_fix_album_message_one": [
-            .it: "Nell'album «%@» c'è un altro brano senza copertina. Vuoi usare la stessa copertina anche per lui?",
-            .en: "The album “%@” has 1 more song without a cover. Do you want to use the same cover for it too?"
+            .it: "Nell'album «%@» c'è un altro brano. Vuoi usare la stessa copertina anche per lui?",
+            .en: "The album “%@” has 1 more song. Do you want to use the same cover for it too?"
         ],
         "button_continue": [.it: "Continua", .en: "Continue"],
         "alert_stop_send_title": [.it: "Interrompere l'invio?", .en: "Stop sending?"],
@@ -1652,8 +1683,8 @@ private enum L {
             .it: "Carica automaticamente le Artwork da Music", .en: "Load artwork from Music automatically"
         ],
         "settings_auto_apple_artwork_hint": [
-            .it: "Se attivo, le copertine mancanti si caricano da sole espandendo una playlist, un artista o un album e selezionando i brani. Se spento, si chiedono con il click destro («Carica Artwork da Music»).",
-            .en: "When on, missing artwork loads by itself when you expand a playlist, artist or album and when you select songs. When off, request it with right-click (“Load artwork from Music”)."
+            .it: "Se attivo, le copertine mancanti si caricano da sole espandendo una playlist, un artista o un album e selezionando i brani. Se spento, non si caricano da sole: puoi sistemarle con «Fix Artwork online…» dal click destro.",
+            .en: "When on, missing artwork loads by itself when you expand a playlist, artist or album and when you select songs. When off, it does not load by itself: use “Artwork Online Fix…” from the right-click menu."
         ],
         "music_prompt_title": [
             .it: "Aprire Music?", .en: "Open Music?"
@@ -1669,8 +1700,8 @@ private enum L {
             .en: "Music is not running: it must be open to retrieve the artwork. It will start in the background, without covering Music Manager."
         ],
         "music_prompt_startup_message": [
-            .it: "Il recupero automatico delle Artwork è attivo, ma Music è chiusa. Vuoi aprirla (in secondo piano, senza coprire Music Manager)?\n\nSe rispondi No, il recupero automatico verrà disattivato in Impostazioni ▸ Artwork: potrai comunque richiederlo a mano con il click destro.",
-            .en: "Automatic artwork retrieval is on, but Music is not running. Do you want to open it (in the background, without covering Music Manager)?\n\nIf you answer No, automatic retrieval will be turned off in Settings ▸ Artwork: you can still request it by hand with right-click."
+            .it: "Il recupero automatico delle Artwork è attivo, ma Music è chiusa. Vuoi aprirla (in secondo piano, senza coprire Music Manager)?\n\nSe rispondi No, il recupero automatico verrà disattivato in Impostazioni ▸ Artwork: potrai comunque sistemare le copertine con «Fix Artwork online…» dal click destro.",
+            .en: "Automatic artwork retrieval is on, but Music is not running. Do you want to open it (in the background, without covering Music Manager)?\n\nIf you answer No, automatic retrieval will be turned off in Settings ▸ Artwork: you can still fix covers with “Artwork Online Fix…” from the right-click menu."
         ],
         "purchased_track_help": [
             .it: "Brano acquistato su iTunes Store: la riproduzione sul Garmin non è garantita (possibile DRM).",

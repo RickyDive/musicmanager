@@ -67,6 +67,11 @@ enum DeviceImageService {
         var trackExtensions: Set<String>
         /// Estensioni accettate per `MEDIA_PLAYLIST` (es. m3u, m3u8).
         var playlistExtensions: Set<String>
+        /// Estensione del file playlist da scrivere (2.3 Beta 3): `m3u8` se il dispositivo lo dichiara (come sempre finora), `m3u` se
+        /// dichiara solo quello, `m3u8` se non dichiara nulla. Il contenuto è lo stesso (percorsi relativi, UTF-8).
+        var playlistFileExtension: String {
+            playlistExtensions.contains("m3u8") ? "m3u8" : (playlistExtensions.contains("m3u") ? "m3u" : "m3u8")
+        }
         /// Il dispositivo accetta musica solo se dichiara almeno un formato `MEDIA_TRACK` in ingresso.
         var isMusicCapable: Bool { !trackExtensions.isEmpty }
     }
@@ -786,14 +791,23 @@ enum DeviceXMLStore {
 /// - `External Library/` — copie compatte (json) delle librerie esterne già lette;
 /// - `Devices/Images/` — immagini dei dispositivi e elenco del Connect IQ Store;
 /// - `Devices/DeviceXML/<Global ID>/GarminDevice.xml` — copia dell'XML dei dispositivi registrati;
-/// - `Artwork/ConfirmedArtwork/`, `Artwork/ArtworkCache/` — copertine (gestite da `ArtworkCache`).
+/// - `Cache/ConfirmedArtwork/` (e la vecchia `Cache/ArtworkCache/`) — copertine confermate (gestite da `ArtworkCache`);
+/// - `Cache/ArtistsMiniature/` — miniature degli artisti scaricate da Apple Music (`ArtistThumbnailService`).
+/// Dalla 2.3 Beta 3 la cartella `Artwork/` non esiste più: il suo contenuto è sotto `Cache/`.
 enum AppFolders {
     nonisolated static var base: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MusicManager", isDirectory: true)
     }
     nonisolated static var externalLibrary: URL { base.appendingPathComponent("External Library", isDirectory: true) }
-    nonisolated static var artwork: URL { base.appendingPathComponent("Artwork", isDirectory: true) }
+    /// `Cache/`: cartella unica delle cache (copertine confermate, miniature degli artisti). Dalla 2.3 Beta 3 sostituisce `Artwork/`.
+    nonisolated static var cache: URL { base.appendingPathComponent("Cache", isDirectory: true) }
+    /// Cartella delle copertine confermate: coincide con `cache` (nome tenuto per `ArtworkCache`).
+    nonisolated static var artwork: URL { cache }
+    /// 2.3 Beta 3: `Cache/ArtistsMiniature/` — le sole miniature degli artisti (vedi `ArtistThumbnailService`).
+    /// Elenco degli artisti non trovati su Apple Music (con la data), ricordati per 15 giorni (`ArtistThumbnailService`).
+    nonisolated static var artistsNotFound: URL { cache.appendingPathComponent("ArtistsNotFound.json") }
+    nonisolated static var artistsMiniature: URL { cache.appendingPathComponent("ArtistsMiniature", isDirectory: true) }
     nonisolated static var devices: URL { base.appendingPathComponent("Devices", isDirectory: true) }
     nonisolated static var devicesImages: URL { devices.appendingPathComponent("Images", isDirectory: true) }
     nonisolated static var devicesXML: URL { devices.appendingPathComponent("DeviceXML", isDirectory: true) }
@@ -833,6 +847,15 @@ enum AppFolders {
         let music = fm.homeDirectoryForCurrentUser.appendingPathComponent("Music", isDirectory: true)
         moveFolder(music.appendingPathComponent("GarminMusicManager", isDirectory: true),
                    to: music.appendingPathComponent("MusicManager", isDirectory: true))
+        // 2.3 Beta 3: `Artwork/` → `Cache/` (ConfirmedArtwork e ArtworkCache); la cartella `Artwork` vuota si elimina.
+        let oldArtwork = base.appendingPathComponent("Artwork", isDirectory: true)
+        moveFolder(oldArtwork.appendingPathComponent("ConfirmedArtwork", isDirectory: true),
+                   to: cache.appendingPathComponent("ConfirmedArtwork", isDirectory: true))
+        moveFolder(oldArtwork.appendingPathComponent("ArtworkCache", isDirectory: true),
+                   to: cache.appendingPathComponent("ArtworkCache", isDirectory: true))
+        if let left = try? fm.contentsOfDirectory(atPath: oldArtwork.path), left.allSatisfy({ $0 == ".DS_Store" }) {
+            try? fm.removeItem(at: oldArtwork)
+        }
         moveFolder(base.appendingPathComponent("ConfirmedArtwork", isDirectory: true),
                    to: artwork.appendingPathComponent("ConfirmedArtwork", isDirectory: true))
         moveFolder(base.appendingPathComponent("ArtworkCache", isDirectory: true),

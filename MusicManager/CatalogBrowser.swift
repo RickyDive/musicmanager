@@ -68,6 +68,13 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     @State private var derived = CatalogDerivedCache<Track>()
     /// Ultimo brano cliccato nella scheda Brani: punto di partenza della selezione con Maiusc (shift-click).
     @State private var songAnchorID: Track.ID?
+    /// Balloon dell'icona «in playlist» del dispositivo: nomi, quante altre e riquadro dell'icona (nello spazio «catalogBrowser»).
+    struct MembershipHover: Equatable {
+        let names: [String]
+        let more: Int
+        let frame: CGRect
+    }
+    @State private var membershipHover: MembershipHover?
     /// Ultima riga o intestazione cliccata nelle schede Album/Artisti/Playlist (chiave di `rangeEntries`): punto di partenza del Maiusc+clic.
     @State private var groupAnchorKey: String?
     /// Selezione a trascinamento nella scheda Brani: stato del gesto in corso (vedi `SongDragSelector`).
@@ -110,6 +117,14 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// Se presente, nelle schede Brani/Album/Artisti i brani inseriti in almeno una playlist mostrano l'icona
     /// `music.note.list` e il menu contestuale offre «Mostra in playlist» (elenco delle playlist che li contengono).
     var playlistsContainingTrack: ((Track) -> [(id: String, title: String)])? = nil
+    /// 2.3 Beta 3 (pannello dispositivo): invece del suggerimento nativo, l'icona «in playlist» mostra subito un balloon con i nomi
+    /// delle playlist (come quello della barra della memoria) e la colonna esiste anche senza icone di copertina.
+    var showsInstantMembershipBalloon = false
+    func instantMembershipBalloon() -> Self {
+        var copy = self
+        copy.showsInstantMembershipBalloon = true
+        return copy
+    }
     /// Doppio click su un brano: riceve il brano e la "coda" (gli altri brani dello stesso
     /// contesto in cui si trova — l'intero elenco Brani, oppure il contenuto dell'album, artista
     /// o playlist aperti) da usare per i pulsanti avanti/indietro del mini player. Nil per non
@@ -157,6 +172,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     var genreFilterEnabled = false
     /// Posizionamento da tastiera solo sulla prima lettera (librerie remote e su unità esterne, dove ogni scorrimento è lento).
     var typeAheadFirstLetterOnly = false
+    /// Miniature degli artisti: scaricarle da Apple Music solo per la libreria locale (default no). Librerie remote, unità esterne
+    /// e dispositivo usano solo quelle già in cache (`ArtistThumbnailService.cachedThumbnail`).
+    var downloadsArtistThumbnails = false
     @State private var genreKey: String?
     @State private var genreList: [GenreEntry] = []
     struct GenreEntry: Hashable { let key: String; let name: String; let count: Int }
@@ -352,6 +370,13 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         return copy
     }
 
+    /// Consente la ricerca online delle miniature degli artisti (solo libreria locale).
+    func artistThumbnailDownload(_ value: Bool) -> Self {
+        var copy = self
+        copy.downloadsArtistThumbnails = value
+        return copy
+    }
+
     /// Posizionamento da tastiera solo sulla prima lettera digitata (le altre, entro il secondo, sono ignorate).
     func typeAheadFirstLetterOnly(_ value: Bool) -> Self {
         var copy = self
@@ -388,6 +413,8 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         // L'elenco è la vista principale (a tutta altezza); selettore, ricerca e l'eventuale
         // contenuto del pannello stanno nella barra trasparente in alto, i pulsanti in quella in basso.
         content
+            .coordinateSpace(name: "catalogBrowser")
+            .overlay { membershipBalloonOverlay }
             // Invio del solo brano cliccato (fuori dalla selezione): a invio concluso si ripristina la selezione di prima.
             .onChange(of: rowMenu?.isBusy) { _, busy in
                 guard let busy, selectionToRestore != nil else { return }
@@ -840,6 +867,13 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         scrollToBestMatch(entries, text: typed, rowOffset: rowOffset, proxy: proxy, fastScroll: fastScroll)
     }
 
+    /// Articoli iniziali ignorati nel posizionamento da tastiera (italiano, inglese, spagnolo, francese, tedesco), già in
+    /// minuscolo e senza accenti, con lo spazio (o l'apostrofo) che li separa dal resto del titolo.
+    private static var leadingArticles: [String] {   // calcolata: i tipi generici non hanno proprietà statiche memorizzate
+        ["the ", "a ", "an ", "il ", "lo ", "la ", "i ", "gli ", "le ", "l'", "un ", "uno ", "una ", "un'",
+         "el ", "los ", "las ", "les ", "der ", "die ", "das ", "ein ", "eine "]
+    }
+
     private func scheduleTypeAheadReset() {
         typeAheadGeneration += 1
         let generation = typeAheadGeneration
@@ -857,14 +891,27 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         }
         let typed = Array(norm(text))
         guard !typed.isEmpty else { return }
+        // Spazi e articoli iniziali non contano («The Beatles» si trova digitando «beatles»; digitando «the» si trova comunque):
+        // per ogni titolo vale la corrispondenza migliore tra il titolo intero e il titolo senza spazi/articolo iniziali.
+        func matchLength(_ candidate: [Character]) -> Int {
+            var n = 0
+            while n < typed.count, n < candidate.count, candidate[n] == typed[n] { n += 1 }
+            return n
+        }
         let searchStart = Date()
         var bestIndex: Int?
         var bestLength = 0
         for (index, (_, title)) in entries.enumerated() {
             // Si normalizza solo l'inizio del titolo (build 28): con 55.000 voci normalizzare i titoli interi costa secondi.
-            let candidate = Array(norm(String(title.prefix(typed.count + 3))))
-            var n = 0
-            while n < typed.count, n < candidate.count, candidate[n] == typed[n] { n += 1 }
+            let head = norm(String(title.prefix(typed.count + 8)))
+                .replacingOccurrences(of: "\u{2019}", with: "'")
+                .replacingOccurrences(of: "\u{2018}", with: "'")
+            let trimmed = String(head.drop(while: { $0.isWhitespace }))
+            var n = matchLength(Array(trimmed))
+            if n < typed.count, let article = Self.leadingArticles.first(where: { trimmed.hasPrefix($0) }) {
+                let rest = trimmed.dropFirst(article.count).drop(while: { $0.isWhitespace })
+                n = max(n, matchLength(Array(rest)))
+            }
             if n > bestLength {
                 bestLength = n
                 bestIndex = index
@@ -1037,41 +1084,8 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 32, height: 32)
         } else {
-            let picks = mosaicTracks(group)
-            if picks.count >= 4 {
-                VStack(spacing: 2) {
-                    HStack(spacing: 2) { mosaicCell(picks[0]); mosaicCell(picks[1]) }
-                    HStack(spacing: 2) { mosaicCell(picks[2]); mosaicCell(picks[3]) }
-                }
-                .frame(width: 32, height: 32)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-            } else if let first = picks.first {
-                ArtworkThumbnail(track: first, provider: artworkProvider, version: artworkRevision, size: 32,
-                                 placeholderSymbol: "music.note.list")
-            } else {
-                ZStack {
-                    Color.secondary.opacity(0.15)
-                    Image(systemName: "music.note.list").font(.system(size: 13)).foregroundStyle(.secondary)
-                }
-                .frame(width: 32, height: 32)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-            }
+            PlaylistMosaic(tracks: group.tracks, provider: artworkProvider, version: artworkRevision)
         }
-    }
-
-    private func mosaicCell(_ track: Track) -> some View {
-        ArtworkThumbnail(track: track, provider: artworkProvider, version: artworkRevision, size: 15, placeholderSymbol: "music.note")
-    }
-
-    /// Fino a quattro brani di album diversi (tra i primi 300 della playlist) per il mosaico.
-    private func mosaicTracks(_ group: TrackGroup<Track>) -> [Track] {
-        var seen = Set<String>()
-        var out: [Track] = []
-        for track in group.tracks.prefix(300) where seen.insert(track.album.lowercased()).inserted {
-            out.append(track)
-            if out.count == 4 { break }
-        }
-        return out
     }
 
     // MARK: Playlist: righe piatte con colonne
@@ -1086,6 +1100,10 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// Altezza del contenuto di ogni riga di Album e Artisti (con il rientro verticale della lista fa 40 pt, l'altezza minima
     /// impostata): righe tutte uguali, così la tabella non deve misurarle una a una.
     private static var fixedRowContentHeight: CGFloat { 32 }
+    /// Diametro del cerchio dell'artista nella scheda Artisti: 36 pt come in Apple Music (misurato su uno screenshot Retina: 72 px).
+    private static var artistCoverSize: CGFloat { 36 }
+    /// Copertina dell'album dentro l'artista: 32 pt, un po' meno del cerchio dell'artista, per distinguere i due livelli.
+    private static var albumInArtistCoverSize: CGFloat { 32 }
     private static var coverSize: CGFloat { 32 }
     private static var coverTitleGap: CGFloat { 8 }
 
@@ -1202,9 +1220,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                     .frame(width: 32, height: 32)
                     .overlay(alignment: .topLeading) { selectionBadge(group, isPlaylists: false) }
             }
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: settings.listTextSize.lineSpacing) {
                 Text(group.title).font(.system(size: settings.listTextSize.points)).fontWeight(.medium).lineLimit(1)
-                Text(subtitleText(group)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(subtitleText(group)).font(.system(size: settings.listTextSize.secondaryPoints)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             purchasedBadge(count: groupStats(group).purchased)
@@ -1358,6 +1376,13 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             GlassInsetRow(edge: .bottom)
         }
         .listStyle(.inset)
+        // Miniature degli artisti: tutto l'elenco si scarica in sottofondo, a cinque blocchi (solo libreria locale, con la ricerca vuota).
+        .task(id: "\(listCategory == .artists)|\(downloadsArtistThumbnails && settings.autoLoadAppleArtwork)|\(query.isEmpty)|\(groups.count)|\(groups.first?.id ?? "")|\(groups.last?.id ?? "")") {
+            guard listCategory == .artists, downloadsArtistThumbnails, settings.autoLoadAppleArtwork, query.isEmpty else { return }
+            let names = groups.filter { !$0.subgroups.isEmpty && $0.id != "compilations" }.map(\.title)
+            await ArtistThumbnailService.shared.enqueueBackground(ArtistThumbnailService.interleaved(names, blocks: 5),
+                                                                  size: ArtistCoverBox.pixels)
+        }
         .onChange(of: query) { _, _ in
             // Ricerca nelle playlist: si aprono anche le playlist trovate per un loro brano (non per il titolo).
             guard isPlaylists, !query.isEmpty else { return }
@@ -1477,10 +1502,18 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             if showArtwork, let first = group.tracks.first {
                 ArtworkThumbnail(track: first, provider: artworkProvider, version: artworkRevision, size: 32,
                                  placeholderSymbol: "music.quarternote.3")
+            } else if !group.subgroups.isEmpty {
+                // 2.3 Beta 3, scheda Artisti: tre livelli con miniatura (Artista → Album → Brani). Per ora il riquadro
+                // dell'artista è vuoto, della stessa dimensione della miniatura degli album (`artistCoverSize`); in seguito
+                // vi comparirà la foto dell'artista.
+                // (`ArtistCoverBox` mostra la miniatura se c'è, già in cache o scaricata da Apple Music; altrimenti resta vuoto.)
+                ArtistCoverBox(name: group.id == "compilations" ? "" : group.title, size: Self.artistCoverSize,
+                               fetchOnline: settings.autoLoadAppleArtwork && downloadsArtistThumbnails,
+                               isCompilations: group.id == "compilations")
             }
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: settings.listTextSize.lineSpacing) {
                 Text(group.title).font(.system(size: settings.listTextSize.points)).fontWeight(.medium).lineLimit(1)
-                Text(subtitleText(group)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(subtitleText(group)).font(.system(size: settings.listTextSize.secondaryPoints)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             purchasedBadge(count: group.tracks.filter(\.isPurchased).count)
@@ -1525,12 +1558,12 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 toggleGroupSelection(album, false)
             }
             if let first = album.tracks.first {
-                ArtworkThumbnail(track: first, provider: artworkProvider, version: artworkRevision, size: 28,
+                ArtworkThumbnail(track: first, provider: artworkProvider, version: artworkRevision, size: Self.albumInArtistCoverSize,
                                  placeholderSymbol: "music.quarternote.3")
             }
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: settings.listTextSize.lineSpacing) {
                 Text(album.title).font(.system(size: settings.listTextSize.points)).lineLimit(1)
-                Text(subtitleText(album)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(subtitleText(album)).font(.system(size: settings.listTextSize.secondaryPoints)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             purchasedBadge(count: album.tracks.filter(\.isPurchased).count)
@@ -2461,18 +2494,18 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             } else {
                 ArtworkThumbnail(track: track, provider: artworkProvider, version: artworkRevision, size: 32)
             }
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: settings.listTextSize.lineSpacing) {
                 // «Artista in evidenza» (solo Custom Playlist): artista in grande, titolo e album sulla riga piccola.
                 Text(artistFirst ? track.artist : track.title).font(.system(size: settings.listTextSize.points)).lineLimit(1)
                 if !insideAlbum {
                     HStack(spacing: 6) {
                         Text(artistFirst ? "\(track.title) — \(track.album)" : "\(track.artist) — \(track.album)")
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            .font(.system(size: settings.listTextSize.secondaryPoints)).foregroundStyle(.secondary).lineLimit(1)
                     }
                 } else if let differing = artistDifferingFromAlbum(track) {
                     // Dentro un album (schede Album e Artisti) l'album e il suo artista sono già nell'intestazione:
                     // sotto il brano resta solo l'artista, e solo se diverso da quello dell'album (raccolte).
-                    Text(differing).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(differing).font(.system(size: settings.listTextSize.secondaryPoints)).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             Spacer()
@@ -2551,6 +2584,10 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             } else if let t = track.trailingText {
                 Text(t).font(.caption).foregroundStyle(.secondary)
             }
+            // 2.3 Beta 3 (dispositivo): colonna «in playlist» prima della durata, come nel pannello Music.
+            if showsInstantMembershipBalloon, artworkOriginProvider == nil, category != .playlists, let lookup = playlistsContainingTrack {
+                deviceMembershipColumn(track, lookup)
+            }
             // Durata del brano: subito a sinistra del riquadro di selezione (cifre a larghezza fissa, allineate a
             // destra, così la colonna resta ordinata).
             // Durata del brano: subito a sinistra del riquadro di selezione.
@@ -2590,6 +2627,70 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             if let playingTrackID, playingTrackID == track.id {
                 playingIndicator.offset(x: -19)
             }
+        }
+    }
+
+    /// Colonna «in playlist» del pannello dispositivo: icona per i brani inseriti in almeno una playlist, vuota per gli altri
+    /// (larghezza fissa, per l'allineamento). Al passaggio del mouse mostra subito il balloon (vedi `membershipBalloonOverlay`).
+    private func deviceMembershipColumn(_ track: Track, _ lookup: (Track) -> [(id: String, title: String)]) -> some View {
+        let list = lookup(track)
+        return Group {
+            if list.isEmpty {
+                Color.clear
+            } else {
+                Image(systemName: "music.note.list")
+                    .foregroundStyle(Color.statusNeutral)
+                    .overlay(GeometryReader { geo in
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onHover { inside in
+                                let frame = geo.frame(in: .named("catalogBrowser"))
+                                if inside {
+                                    membershipHover = MembershipHover(
+                                        names: list.prefix(Self.membershipMenuLimit).map { $0.title },
+                                        more: max(0, list.count - Self.membershipMenuLimit),
+                                        frame: frame)
+                                } else if membershipHover?.frame == frame {
+                                    membershipHover = nil
+                                }
+                            }
+                    })
+            }
+        }
+        .font(.system(size: 14))
+        .frame(width: 20)
+    }
+
+    /// Balloon immediato dell'icona «in playlist»: a sinistra dell'icona, centrato in verticale e tenuto dentro il pannello; disegnato
+    /// sopra l'intero elenco (non dentro la riga, che lo taglierebbe).
+    @ViewBuilder
+    private var membershipBalloonOverlay: some View {
+        if let hover = membershipHover {
+            GeometryReader { geo in
+                let lines = hover.names.count + (hover.more > 0 ? 1 : 0)
+                let height = CGFloat(lines) * 16 + 14
+                let top = min(max(hover.frame.midY - height / 2, 4), max(4, geo.size.height - height - 4))
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(hover.names.enumerated()), id: \.offset) { _, name in
+                        Text(name).lineLimit(1)
+                    }
+                    if hover.more > 0 {
+                        Text(t("menu_show_in_playlist_more", hover.more)).foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption)
+                .fixedSize()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.primary.opacity(0.15), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.2), radius: 3, y: 1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(.trailing, max(0, geo.size.width - hover.frame.minX + 6))
+                .padding(.top, top)
+            }
+            .allowsHitTesting(false)
+            .transition(.identity)
         }
     }
 
@@ -2820,9 +2921,135 @@ enum CustomPlaylistSortOption: String, CaseIterable, Identifiable {
     }
 }
 
+/// Riquadro dell'artista nella scheda Artisti: la miniatura dell'artista (`ArtistThumbnailService`) o, se manca, un quadrato vuoto.
+/// La miniatura già salvata sul disco compare subito; quella da scaricare parte dopo 0,2 s da quando la riga è visibile
+/// (scorrendo in fretta l'attività si annulla) e solo se `fetchOnline` è attivo (libreria locale e impostazione «Apple Music artwork»).
+private struct ArtistCoverBox: View {
+    let name: String
+    let size: CGFloat
+    let fetchOnline: Bool
+    /// Voce «Compilations»: non è un artista, mostra il simbolo di due persone.
+    var isCompilations = false
+    @State private var image: NSImage?
+
+    /// Miniature già decodificate (nome → immagine), per non rileggere il disco a ogni riga che riappare.
+    private static let memory = NSCache<NSString, NSImage>()
+    /// Lato della miniatura richiesta, in pixel (doppio della finestra più grande, per gli schermi Retina).
+    static let pixels = 100
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+            } else if isCompilations {
+                // Compilations: «person.2.fill» grigio (SF Symbols), senza cerchio.
+                Image(systemName: "person.2.fill")
+                    .resizable().scaledToFit()
+                    .frame(width: size * 0.78)
+                    .foregroundStyle(Color.secondary.opacity(0.7))
+            } else {
+                // Artista senza miniatura (non trovata o non ancora scaricata): cerchio grigio con il microfono bianco, come Apple Music.
+                Image(systemName: "music.mic.circle.fill")
+                    .resizable().scaledToFit()
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(Color.white, Color.secondary.opacity(0.55))
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())   // come in Apple Music: artisti in cerchio, album in quadrato (per tornare al quadrato: RoundedRectangle(cornerRadius: size * 0.18))
+        .task(id: "\(name)|\(fetchOnline)") {
+            guard !name.isEmpty else { image = nil; return }
+            let key = name as NSString
+            if let known = Self.memory.object(forKey: key) { image = known; return }
+            image = nil
+            let service = ArtistThumbnailService.shared
+            var data = await service.cachedThumbnail(for: name, size: Self.pixels)
+            if data == nil, fetchOnline {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                if Task.isCancelled { return }
+                data = await service.thumbnail(for: name, size: Self.pixels)
+            }
+            if Task.isCancelled { return }
+            if let data, let img = NSImage(data: data) {
+                Self.memory.setObject(img, forKey: key)
+                image = img
+            }
+        }
+        // Una miniatura scaricata in sottofondo mentre la riga è visibile e ancora vuota: si rilegge dal disco.
+        .onReceive(NotificationCenter.default.publisher(for: ArtistThumbnailService.didArriveNotification)) { note in
+            guard image == nil, !name.isEmpty, (note.userInfo?["name"] as? String) == name else { return }
+            Task {
+                if let data = await ArtistThumbnailService.shared.cachedThumbnail(for: name, size: Self.pixels),
+                   let img = NSImage(data: data) {
+                    Self.memory.setObject(img, forKey: name as NSString)
+                    image = img
+                }
+            }
+        }
+    }
+}
+
 /// Miniatura della copertina per una riga di brano o per l'intestazione di un album.
 /// Carica l'immagine in modo asincrono al primo apparire e la mette in cache per la durata
 /// della vista; se non c'è alcun provider, o il provider restituisce nil, mostra un segnaposto.
+/// Miniatura di una playlist (32 pt): mosaico 2×2 con le copertine di quattro brani di album diversi, o la copertina del primo
+/// brano che ce l'ha se gli album con copertina sono meno di quattro, o il segnaposto se nessuno ce l'ha.
+/// 2.3 Beta 3: si prendono le prime quattro copertine **disponibili**, saltando i brani senza copertina (prima si sceglievano i
+/// primi quattro album e quelli senza copertina lasciavano celle vuote nel mosaico). La ricerca è in ordine, si ferma alla quarta
+/// trovata e guarda al massimo 12 album diversi (dispositivo: ogni copertina è una lettura MTP).
+private struct PlaylistMosaic<Track: CatalogTrack>: View {
+    let tracks: [Track]
+    let provider: ((Track) async -> Data?)?
+    let version: Int
+
+    @State private var images: [NSImage] = []
+
+    var body: some View {
+        Group {
+            if images.count >= 4 {
+                VStack(spacing: 2) {
+                    HStack(spacing: 2) { cell(images[0]); cell(images[1]) }
+                    HStack(spacing: 2) { cell(images[2]); cell(images[3]) }
+                }
+            } else if let first = images.first {
+                Image(nsImage: first).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Color.secondary.opacity(0.15)
+                    Image(systemName: "music.note.list").font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(width: 32, height: 32)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .task(id: "\(tracks.count)|\(tracks.first.map { String(describing: $0.id) } ?? "")|\(tracks.last.map { String(describing: $0.id) } ?? "")|\(version)") {
+            guard let provider else { return }
+            var seen = Set<String>()
+            var found: [NSImage] = []
+            var tried = 0
+            for track in tracks.prefix(300) {
+                let key = track.album.isEmpty ? "t|" + String(describing: track.id) : track.album.lowercased()
+                guard seen.insert(key).inserted else { continue }
+                tried += 1
+                if tried > 12 { break }
+                if Task.isCancelled { return }
+                if let data = await provider(track), let image = NSImage(data: data) {
+                    found.append(image)
+                    if found.count == 4 { break }
+                }
+            }
+            if !Task.isCancelled { images = found }
+        }
+    }
+
+    private func cell(_ image: NSImage) -> some View {
+        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+            .frame(width: 15, height: 15)
+            .clipShape(RoundedRectangle(cornerRadius: 15 * 0.18))
+    }
+}
+
+
 private struct ArtworkThumbnail<Track: CatalogTrack>: View {
     let track: Track
     let provider: ((Track) async -> Data?)?
@@ -3725,9 +3952,9 @@ struct SimilarTracksSheet: View {
         let track = result.track
         return HStack(spacing: 10) {
             ArtworkThumbnail(track: track, provider: artworkProvider, version: artworkRevision, size: 32)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: settings.listTextSize.lineSpacing) {
                 Text(track.title).font(.system(size: settings.listTextSize.points)).lineLimit(1)
-                Text("\(track.artist) — \(track.album)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text("\(track.artist) — \(track.album)").font(.system(size: settings.listTextSize.secondaryPoints)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             scoreBar(result.score, plays: track.playCountStored)

@@ -106,6 +106,11 @@ actor MTPService {
 
     func setWriteLocked(_ locked: Bool) { writeLocked = locked }
 
+    /// Estensione dei file playlist scritti sul dispositivo (2.3 Beta 3): `m3u8` salvo i dispositivi che dichiarano solo `m3u`
+    /// (vedi `MediaCapabilities.playlistFileExtension`). Si imposta alla connessione.
+    private var playlistExtension = "m3u8"
+    func setPlaylistExtension(_ ext: String) { playlistExtension = ext }
+
     // MARK: Volume usato come dispositivo (2.1 Beta 3, sperimentale)
 
     /// Radice di un volume (scheda SD, disco in archiviazione di massa, immagine disco) usato come se fosse un dispositivo.
@@ -239,6 +244,7 @@ actor MTPService {
 
     func disconnect() {
         writeLocked = false
+        playlistExtension = "m3u8"
         volumeRoot = nil
         volumeName = ""
         volumePaths = [:]
@@ -664,7 +670,7 @@ actor MTPService {
     /// quando la playlist e i brani stanno nella stessa cartella.
     func uploadPlaylist(name: String, filenames: [String], storageID: UInt32, parentID: UInt32) throws {
         let content = Self.playlistContent(filenames)
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("\(name).m3u8")
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("\(name).\(playlistExtension)")
         defer { try? FileManager.default.removeItem(at: tmp) }
         try content.write(to: tmp, atomically: true, encoding: .utf8)
         try upload(from: tmp, storageID: storageID, parentID: parentID)
@@ -683,7 +689,7 @@ actor MTPService {
         // commento): alcuni dispositivi riscrivono il file con altri a capo e il confronto del testo esatto falliva
         // anche con la playlist scritta correttamente. I motivi di un fallimento finiscono nel registro.
         let expected = Self.normalizedPlaylistLines(Self.playlistContent(filenames))
-        let fileName = "\(name).m3u8"
+        let fileName = "\(name).\(playlistExtension)"
         for attempt in 1...max(1, attempts) {
             if attempt > 1 { deleteExistingPlaylistFile(named: name, storageID: storageID, parentID: parentID) }
             do { try uploadPlaylist(name: name, filenames: filenames, storageID: storageID, parentID: parentID) }
