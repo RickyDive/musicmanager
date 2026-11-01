@@ -12,11 +12,14 @@ struct MusicManagerApp: App {
 
     /// Osserva la lingua: al cambio il corpo dell'app si rivaluta e i menu personalizzati e i titoli delle finestre si aggiornano.
     @ObservedObject private var loc = LocalizationManager.shared
+    /// Colore dell'interfaccia (2.3 Beta 2): il corpo si rivaluta quando cambia l'opzione o il colore di selezione.
+    @ObservedObject private var appSettings = AppSettings.shared
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .buttonStyle(.flat)
+                .tint(appSettings.interfaceTint)
         }
         // All'apertura la finestra ha sempre la dimensione minima necessaria a mostrare tutto il contenuto
         // (né a tutto schermo né una misura salvata troppo piccola): non si ripristina il frame precedente.
@@ -43,6 +46,7 @@ struct MusicManagerApp: App {
         Settings {
             SettingsView()
                 .buttonStyle(.flat)
+                .tint(appSettings.interfaceTint)
         }
     }
 }
@@ -267,8 +271,9 @@ struct FitWindowToVisibleScreen: NSViewRepresentable {
 enum AppLog {
     private static let queue = DispatchQueue(label: "com.crdev.MusicManager.log")
     private static var lastMessage = ""
-    private static let maxBytes = 400_000
-    private static let keepBytes = 150_000
+    // Build 38: limiti più ampi (400 KB / 150 KB tagliavano l'inizio della sessione: la diagnostica dello scorrimento riempie il registro).
+    private static let maxBytes = 4_000_000
+    private static let keepBytes = 2_500_000
 
     /// Registro dettagliato (Impostazioni ▸ Avanzate): se spento, `debug` non scrive nulla.
     nonisolated(unsafe) static var detailed = false
@@ -310,7 +315,15 @@ enum AppLog {
                let data = try? Data(contentsOf: url) {
                 var tail = data.suffix(keepBytes)
                 if let nl = tail.firstIndex(of: 0x0A) { tail = tail[tail.index(after: nl)...] }
-                try? Data(tail).write(to: url)
+                // In testa si conserva l'ultima riga di avvio (versione, build, sistema) e si segnala il taglio.
+                var kept = Data()
+                if let text = String(data: data, encoding: .utf8),
+                   let start = text.components(separatedBy: "\n").last(where: { $0.contains("=== Avvio") }) {
+                    kept.append(Data((start + "\n").utf8))
+                    kept.append(Data("(registro accorciato: le righe più vecchie sono state tolte)\n".utf8))
+                }
+                kept.append(Data(tail))
+                try? kept.write(to: url)
             }
             if !fm.fileExists(atPath: url.path) { fm.createFile(atPath: url.path, contents: nil) }
             if let handle = try? FileHandle(forWritingTo: url) {
@@ -461,14 +474,30 @@ struct HelpMenuCommands: Commands {
 enum StallWatchdog {
     static var lastAction = ""
     private static var lastTick = Date()
+    private static var lastUptime = ProcessInfo.processInfo.systemUptime
     private static var lastEvent = ""
     private static var lastEventTime = Date.distantPast
     private static var started = false
+    /// Build 38: app in secondo piano o Mac in sospensione (i «blocchi» di centinaia di secondi del registro erano pause, non blocchi).
+    private static var inactiveSince: Date?
+    private static var lastResume = Date.distantPast
 
     static func start() {
         guard !started else { return }
         started = true
         lastTick = Date()
+        let center = NotificationCenter.default
+        let workspace = NSWorkspace.shared.notificationCenter
+        for (name, nc, begins) in [(NSApplication.didResignActiveNotification, center, true), (NSApplication.didBecomeActiveNotification, center, false),
+                                   (NSWorkspace.willSleepNotification, workspace, true), (NSWorkspace.didWakeNotification, workspace, false),
+                                   (NSWorkspace.screensDidSleepNotification, workspace, true), (NSWorkspace.screensDidWakeNotification, workspace, false)] {
+            nc.addObserver(forName: name, object: nil, queue: .main) { _ in
+                Task { @MainActor in
+                    if begins { if inactiveSince == nil { inactiveSince = Date() } }
+                    else { inactiveSince = nil; lastResume = Date() }
+                }
+            }
+        }
         NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]) { event in
             Task { @MainActor in
                 lastEvent = event.type == .scrollWheel ? "scorrimento" : (event.type == .keyDown ? "tasto" : "clic")
@@ -484,9 +513,23 @@ enum StallWatchdog {
 
     private static func tick() {
         let now = Date()
+        let uptime = ProcessInfo.processInfo.systemUptime
         let stall = now.timeIntervalSince(lastTick) - 0.1
+        // L'orologio di sistema (uptime) si ferma mentre il Mac dorme, quello di calendario no: la differenza è il tempo di sospensione.
+        let asleep = (now.timeIntervalSince(lastTick) - (uptime - lastUptime)) > 1
         lastTick = now
+        lastUptime = uptime
         guard stall > 0.35, AppLog.detailed else { return }
+        if asleep {
+            AppLog.debug("[prestazioni] pausa di \(String(format: "%.1f", stall)) s: il Mac era in sospensione (non è un blocco)")
+            return
+        }
+        // Pausa dell'app (secondo piano / sospensione) e non blocco: il ritardo coincide con un periodo di inattività.
+        // App non in primo piano: macOS rallenta i timer (App Nap) e il giro arriva in ritardo senza che l'interfaccia sia bloccata.
+        if stall > 2, !NSApplication.shared.isActive || inactiveSince != nil || now.timeIntervalSince(lastResume) < stall + 3 {
+            AppLog.debug("[prestazioni] pausa di \(String(format: "%.1f", stall)) s con l'app in secondo piano o il Mac in sospensione (non è un blocco)")
+            return
+        }
         let sinceEvent = now.timeIntervalSince(lastEventTime)
         let event = sinceEvent < 30 ? "\(lastEvent) \(String(format: "%.1f", sinceEvent)) s fa" : "nessuno"
         AppLog.debug("[prestazioni] INTERFACCIA FERMA per \(String(format: "%.2f", stall)) s; ultimo evento: \(event); ultima azione: \(lastAction.isEmpty ? "—" : lastAction); memoria \(ProcessMemory.residentMB) MB; thread \(ProcessMemory.threadCount)")

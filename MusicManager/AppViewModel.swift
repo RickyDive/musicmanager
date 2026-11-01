@@ -115,6 +115,14 @@ struct PerfTimer {
     }
 }
 
+/// Avanzamento del salvataggio su Music (2.3 Beta 2), mostrato nella capsula solo per le operazioni lunghe.
+struct MusicSaveProgress {
+    var name: String
+    var done = 0
+    var total: Int
+    var cancelling = false
+}
+
 struct DeletionProgress: Identifiable {
     let id = UUID()
     var title: String
@@ -243,6 +251,57 @@ final class AppViewModel: ObservableObject {
     @Published var exportPlan: DeviceExportPlan?
     /// Finestra di avanzamento delle eliminazioni sul dispositivo (nil = nessuna in corso).
     @Published var deletionProgress: DeletionProgress?
+    /// Salvataggio su Music in corso e abbastanza lungo da mostrare la barra (vedi `musicWrite`).
+    @Published var musicSaveProgress: MusicSaveProgress?
+    private var musicWriteCancel: AppleMusicScripting.WriteCancel?
+
+    /// «Annulla» della capsula: il blocco in corso termina, poi si ferma (i brani già aggiunti restano nella playlist).
+    func cancelMusicSave() {
+        musicWriteCancel?.cancel()
+        musicSaveProgress?.cancelling = true
+    }
+
+    /// Scrive i brani nella playlist di Music a blocchi, fuori dal thread principale. La barra compare solo se la stima
+    /// supera 3 s (file esterni da importare o liste molto lunghe); altrimenti resta il solo messaggio di stato.
+    private func musicWrite(name: String, tracks: [LocalTrack]) async throws -> Int {
+        guard !tracks.isEmpty else { return 0 }
+        let showBar = AppleMusicScripting.estimatedWriteSeconds(for: tracks) > 3
+        let cancel = AppleMusicScripting.WriteCancel()
+        musicWriteCancel = cancel
+        musicSavingTracks = tracks
+        if showBar { musicSaveProgress = MusicSaveProgress(name: name, total: tracks.count) }
+        // Con brani esterni da importare (la parte lenta) compare anche un pannello con l'elenco che si accorcia a ogni blocco.
+        let external = tracks.filter { UInt64($0.id) == nil }.map(\.title)
+        var panel: NSPanel?
+        if showBar, !external.isEmpty {
+            let model = QuitDialogModel(title: t("music_save_panel_title"), message: t("music_save_panel_message", 0, tracks.count),
+                                        buttons: [QuitDialogButton(title: t("button_cancel"), isCancel: true)])
+            model.items = external
+            model.itemsHeight = min(260, CGFloat(external.count) * 22 + 16)
+            model.finish = { [weak self] _ in Task { @MainActor in self?.cancelMusicSave() } }
+            musicSavePanelModel = model
+            panel = ProgressPanelPresenter.show(model)
+        }
+        defer {
+            panel?.orderOut(nil)
+            musicSavePanelModel = nil; musicSavingTracks = []
+            musicSaveProgress = nil; musicWriteCancel = nil
+        }
+        return try await AppleMusicScripting.addTracksInChunks(tracks, toPlaylistNamed: name, cancel: cancel) { [weak self] done in
+            Task { @MainActor in self?.updateMusicSaveProgress(done: done) }
+        }
+    }
+
+    private var musicSavingTracks: [LocalTrack] = []
+    private var musicSavePanelModel: QuitDialogModel?
+
+    /// Dopo ogni blocco: anello della capsula e, se c'è, pannello (togliendo dall'elenco i brani esterni già importati).
+    private func updateMusicSaveProgress(done: Int) {
+        musicSaveProgress?.done = done
+        guard let model = musicSavePanelModel else { return }
+        model.items = musicSavingTracks.dropFirst(done).filter { UInt64($0.id) == nil }.map(\.title)
+        model.message = t("music_save_panel_message", done, musicSavingTracks.count)
+    }
     /// Brano di una libreria di rete in avvio (capsula: anello verde + «Caricamento dal server remoto…»).
     @Published var remotePlaybackLoading: RemotePlaybackLoading?
     /// Riproduzione dalle librerie di rete disattivata (solo fino alla chiusura dell'app) dopo un avvio troppo lento.
@@ -351,6 +410,20 @@ final class AppViewModel: ObservableObject {
         let name = nick.isEmpty ? ((known?.model.isEmpty == false ? known?.model : nil) ?? deviceID) : nick
         pendingUpdateNotices.append(DeviceUpdateNotice(id: deviceID, name: name, installed: installed, version: version,
                                                        notes: notes, readDate: readDate))
+        // 2.3 Beta 2: oltre alla finestra, un avviso (triangolo giallo) nel centro notifiche, che resta consultabile dopo la chiusura.
+        postNotice(installed.map { t("notice_update_available_installed", name, version, $0) } ?? t("notice_update_available", name, version),
+                   kind: .warning)
+    }
+
+    /// Avviso diretto nel centro notifiche (campanella), senza cambiare il messaggio di stato mostrato nella capsula.
+    private func postNotice(_ body: String, kind: NoticeKind) {
+        guard !body.isEmpty, notices.last?.text != body else { return }
+        let entry = NoticeEntry(date: Date(), text: body, kind: kind)
+        notices.append(entry)
+        if notices.count > 100 { notices.removeFirst(notices.count - 100) }
+        if kind == .warning || kind == .error { unreadIssues += 1 }
+        if kind == .error { unreadHasError = true }
+        toast = entry
     }
 
     /// Riga della tabella nella finestra: un dispositivo registrato con l'esito del controllo (nil = non controllato).
@@ -794,9 +867,46 @@ final class AppViewModel: ObservableObject {
         applyPlaylistTypeFilter()
     }
 
+    /// Playlist della libreria locale come gruppi, con la struttura di Apple Music: a ogni livello prima le cartelle (ciascuna seguita
+    /// dal suo contenuto), poi le playlist smart/Genius, poi le normali, ciascun gruppo in ordine alfabetico. Le cartelle senza
+    /// playlist con brani non compaiono; un genitore sconosciuto vale come livello principale.
+    static func orderedPlaylistGroups(_ catalog: LibraryCatalog, byID: [String: LocalTrack]) -> [TrackGroup<LocalTrack>] {
+        let folderByID = Dictionary(catalog.folders.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        func parent(_ id: String?) -> String? { id.flatMap { folderByID[$0] != nil ? $0 : nil } }
+        let playlistsByParent = Dictionary(grouping: catalog.playlists) { parent($0.parentID) }
+        let foldersByParent = Dictionary(grouping: catalog.folders) { parent($0.parentID) }
+        func alpha(_ a: String, _ b: String) -> Bool { a.localizedCaseInsensitiveCompare(b) == .orderedAscending }
+        func hasContent(_ folderID: String, _ depth: Int) -> Bool {
+            guard depth < 12 else { return false }
+            if !(playlistsByParent[folderID] ?? []).isEmpty { return true }
+            return (foldersByParent[folderID] ?? []).contains { hasContent($0.id, depth + 1) }
+        }
+        var result: [TrackGroup<LocalTrack>] = []
+        func emit(_ parentID: String?, path: [FolderRef], depth: Int) {
+            guard depth < 12 else { return }
+            for folder in (foldersByParent[parentID] ?? []).sorted(by: { alpha($0.name, $1.name) }) where hasContent(folder.id, depth) {
+                emit(folder.id, path: path + [FolderRef(id: folder.id, name: folder.name)], depth: depth + 1)
+            }
+            let lists = playlistsByParent[parentID] ?? []
+            let smart = lists.filter { ($0.kind ?? .regular) != .regular }.sorted { alpha($0.name, $1.name) }
+            let regular = lists.filter { ($0.kind ?? .regular) == .regular }.sorted { alpha($0.name, $1.name) }
+            for info in smart + regular {
+                let items = info.trackIDs.compactMap { byID[$0] }
+                result.append(TrackGroup(id: "playlist:\(info.id)", title: info.name, subtitle: playlistSubtitle(items),
+                                         tracks: items, folderPath: path))
+            }
+        }
+        emit(nil, path: [], depth: 0)
+        return result
+    }
+
     private func applyPlaylistTypeFilter() {
         let filter = AppSettings.shared.playlistTypeFilter
-        playlists = allPlaylists.filter { filter.shows(allPlaylistKinds[$0.id]) }
+        playlists = allPlaylists.filter { filter.shows(allPlaylistKinds[$0.id]) }.map { group in
+            var g = group
+            g.isSmart = (allPlaylistKinds[group.id] ?? .regular) != .regular
+            return g
+        }
     }
     /// Libreria letta da un file XML con i file su una cartella montata (nil = non attiva); nome mostrato nel menu.
     @Published var externalLibraryName: String?
@@ -810,9 +920,28 @@ final class AppViewModel: ObservableObject {
     /// Brani scelti solo dalla scheda Playlist, senza una playlist intera: conferma dell'invio dei soli brani
     /// (la playlist di origine non viene creata sul dispositivo).
     @Published var showTracksOnlyFromPlaylistAlert = false
+    /// Invio con una playlist del dispositivo selezionata: proposta di accodare i brani nuovi alla playlist.
+    struct AppendToDevicePlaylistProposal {
+        let playlistTitle: String
+        let items: [LocalTrack]       // i brani scelti (invio normale)
+        let combined: [LocalTrack]    // brani già nella playlist + nuovi, nell'ordine in cui verrà riscritta
+        let newCount: Int
+        let alreadyCount: Int
+    }
+    @Published var appendProposal: AppendToDevicePlaylistProposal?
 
     // MARK: Stato
-    @Published var status = t("status_no_device") { didSet { AppLog.write(NoticeFormat.plain(status)); recordNotice(status) } }
+    @Published var status = t("status_no_device") {
+        didSet {
+            AppLog.write(NoticeFormat.plain(status)); recordNotice(status)
+            // Durante l'analisi che precede un invio il messaggio resta fisso (anche se cambiando libreria altro lo riscrive);
+            // gli avvisi «⚠️» passano.
+            if let m = sendPreparingMessage, status != m, !status.hasPrefix("⚠️") { status = m }
+        }
+    }
+    /// Testo fisso della barra di stato mentre si analizzano i brani prima di un invio (nil = nessuno).
+    private var sendPreparingMessage: String?
+    private func setPreparingStatus(_ message: String) { sendPreparingMessage = message; status = message }
     /// Centro notifiche: cronologia degli ultimi messaggi di stato (max 100), numero di avvisi/errori non letti
     /// (puntino sulla campanella) e ultimo messaggio, mostrato per qualche secondo al centro della barra del titolo.
     @Published var notices: [NoticeEntry] = []
@@ -857,6 +986,9 @@ final class AppViewModel: ObservableObject {
         if kind == .error { unreadHasError = true }
         toast = entry
     }
+    /// Vero dal primo clic su «Invia» finché la preparazione (lettura copertine, controlli, file temporanei) non è finita:
+    /// blocca ogni altro invio, anche se nel frattempo si cambia libreria (es. da rete a Locale).
+    @Published var sendPreparing = false
     @Published var isBusy = false {
         didSet { if !isBusy { progress = nil } }
     }
@@ -1191,6 +1323,12 @@ final class AppViewModel: ObservableObject {
 
     init() {
         StallWatchdog.start()
+        // Copertine scelte memorizzate o cancellate: l'elenco in memoria si rilegge alla prossima richiesta (non a ogni cambio di `artworkRevision`).
+        for name in [ArtworkCache.didChangeChosenNotification, ArtworkCache.didClearNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.chosenCoverKeys = nil }
+            }
+        }
         NotificationCenter.default.addObserver(forName: ArtworkCache.didClearNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.artworkRevision += 1 }   // azzera le origini memorizzate (didSet)
         }
@@ -1258,7 +1396,7 @@ final class AppViewModel: ObservableObject {
         if let stored = visiblePlaylistsStore { return stored }
         let value = playlists.compactMap { g -> TrackGroup<LocalTrack>? in
             let ok = g.tracks.filter(\.isTransferable)
-            return ok.isEmpty ? nil : TrackGroup(id: g.id, title: g.title, subtitle: playlistSubtitle(ok), tracks: ok)
+            return ok.isEmpty ? nil : TrackGroup(id: g.id, title: g.title, subtitle: playlistSubtitle(ok), tracks: ok, folderPath: g.folderPath, isSmart: g.isSmart)
         }
         visiblePlaylistsStore = value
         return value
@@ -1533,11 +1671,7 @@ final class AppViewModel: ObservableObject {
                 guard changed || Set(catalog.tracks.map(\.id)) != Set(localTracks.map(\.id)) else { return }
                 let byID = Dictionary(catalog.tracks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
                 localTracks = catalog.tracks
-                localPlaylists = catalog.playlists.map { info in
-                    let items = info.trackIDs.compactMap { byID[$0] }
-                    return TrackGroup(id: "playlist:\(info.id)", title: info.name,
-                                      subtitle: playlistSubtitle(items), tracks: items)
-                }
+                localPlaylists = Self.orderedPlaylistGroups(catalog, byID: byID)
                 localPlaylistKinds = Dictionary(catalog.playlists.map { ("playlist:\($0.id)", $0.kind ?? .regular) },
                                                 uniquingKeysWith: { a, _ in a })
                 tracks = localTracks
@@ -1564,11 +1698,7 @@ final class AppViewModel: ObservableObject {
             musicOrigins = [:]
             let byID = Dictionary(catalog.tracks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             localTracks = catalog.tracks
-            localPlaylists = catalog.playlists.map { info in
-                let items = info.trackIDs.compactMap { byID[$0] }
-                return TrackGroup(id: "playlist:\(info.id)", title: info.name,
-                                  subtitle: playlistSubtitle(items), tracks: items)
-            }
+            localPlaylists = Self.orderedPlaylistGroups(catalog, byID: byID)
             localPlaylistKinds = Dictionary(catalog.playlists.map { ("playlist:\($0.id)", $0.kind ?? .regular) },
                                             uniquingKeysWith: { a, _ in a })
             // Con una libreria remota a schermo gli elenchi restano i suoi.
@@ -2030,6 +2160,8 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    /// Chiavi delle copertine scelte dall'utente (vedi `ArtworkCache.chosenKeys`), lette una volta e azzerate solo quando cambiano (notifica di `ArtworkCache`).
+    private var chosenCoverKeys: Set<String>?
     /// Origine della copertina mostrata per ogni brano (memorizzata per non rifare le ricerche).
     private var artworkOrigins: [String: ArtworkOrigin] = [:]
 
@@ -2037,6 +2169,18 @@ final class AppViewModel: ObservableObject {
     /// Priorità dell'origine: 1. copertina nel brano (`.own`), 2. cache di Musica (`.musicCache`), 3. cache di GMM
     /// (`.gmmCache`, copertina confermata dalla ricerca online), altrimenti nessuna.
     func appleArtworkResolved(for track: LocalTrack, fromMusic: Bool = true) async -> (data: Data?, origin: ArtworkOrigin) {
+        // Copertina scelta dall'utente in Fix Artwork: ha la precedenza su quella originale (nel file o in Musica), altrimenti
+        // dopo «Conferma» continuerebbe a comparire la vecchia.
+        if AppSettings.shared.lookupMissingArtworkOnline {
+            if chosenCoverKeys == nil { chosenCoverKeys = ArtworkCache.chosenKeys() }
+            if let keys = chosenCoverKeys, !keys.isEmpty {
+                let key = ArtworkCache.key(artist: track.artist, title: track.title, album: track.album)
+                if keys.contains(key), let chosen = ArtworkCache.confirmedImage(forKey: key) {
+                    artworkOrigins[track.id] = .gmmCache
+                    return (chosen, .gmmCache)
+                }
+            }
+        }
         let found = await appleArtworkResolvedWithoutGMM(for: track, fromMusic: fromMusic)
         if found.origin != .none { return found }
         if AppSettings.shared.lookupMissingArtworkOnline,
@@ -2374,6 +2518,14 @@ final class AppViewModel: ObservableObject {
         startPlayback(track)
     }
 
+    /// Rilegge la copertina del player senza svuotarla prima (nessun lampeggio).
+    private func refreshPlayerArtwork(for track: LocalTrack) {
+        Task { [weak self] in
+            guard let data = await self?.appleArtworkResolved(for: track, fromMusic: true).data else { return }
+            await MainActor.run { if self?.playerTrack?.id == track.id { self?.playerArtwork = NSImage(data: data) } }
+        }
+    }
+
     private func loadPlayerArtwork(for track: LocalTrack) {
         playerArtwork = nil
         Task { [weak self] in
@@ -2388,6 +2540,9 @@ final class AppViewModel: ObservableObject {
     /// proprio parte solo da lì (`confirmDeviceExport`).
     func sendSelectedTracksToDevice(skipArtworkCheck: Bool = false, confirmedPartialPlaylist: Bool = false) async {
         guard ensureDeviceWritable() else { return }
+        guard !sendPreparing else { status = "⚠️ " + t("status_send_in_progress"); return }
+        sendPreparing = true
+        defer { sendPreparing = false; sendPreparingMessage = nil }
         // Spazio insufficiente (barra rossa): il pulsante è già disattivato; qui si copre anche il menu contestuale.
         if pendingExceedsFreeSpace {
             status = "⚠️ " + t("storage_pending_exceeds")
@@ -2396,7 +2551,9 @@ final class AppViewModel: ObservableObject {
         // Libreria di un'altra rete: l'Apple Artwork dei brani scelti si legge ora (non scorrendo gli elenchi); poi il
         // controllo normale propone la ricerca online per quelli rimasti senza copertina.
         if isRemoteNetworkLibraryActive {
+            setPreparingStatus(t("status_analyzing_tracks", tracks.filter { selectedTrackIDs.contains($0.id) }.count))
             await loadArtworkNow(tracks.filter { selectedTrackIDs.contains($0.id) && $0.isTransferable })
+            sendPreparingMessage = nil
         }
         // Playlist scelte per intero (una o più, in QUALUNQUE scheda ci si trovi: il browser le tiene aggiornate finché tutte le
         // loro righe restano selezionate): ognuna viene inviata con il proprio file .m3u8. Gli altri brani scelti (da Brani,
@@ -2438,8 +2595,46 @@ final class AppViewModel: ObservableObject {
         if !skipArtworkCheck, await askArtworkSearchIfNeeded(for: items, proceed: { [weak self] in
             Task { await self?.sendSelectedTracksToDevice(skipArtworkCheck: true, confirmedPartialPlaylist: true) }
         }) { return }
+        // Una playlist del dispositivo selezionata: si propone di accodarle i brani nuovi (Aggiungi / Solo invia / Annulla).
+        if selectedDevicePlaylistIDs.count == 1,
+           let group = devicePlaylists.first(where: { $0.id == selectedDevicePlaylistIDs[0] }) {
+            func key(_ track: LocalTrack) -> String { Self.normalizedForMatch(track.title) + "|" + Self.normalizedForMatch(track.artist) }
+            let existing = localTracks(fromDevicePlaylist: group, deviceFilesOnly: true)
+            let present = Set(existing.map(key))
+            var seen = present
+            let fresh = items.filter { seen.insert(key($0)).inserted }
+            if fresh.isEmpty {
+                status = t("status_append_all_present", group.title)
+                return
+            }
+            appendProposal = AppendToDevicePlaylistProposal(playlistTitle: group.title, items: items, combined: existing + fresh,
+                                                            newCount: fresh.count, alreadyCount: items.count - fresh.count)
+            return
+        }
         await perform(t("status_preparing_files")) {
             try await prepareExportBody(items: items, playlistName: nil)
+        }
+    }
+
+    /// Risposta al pannello «Aggiungere N brani alla playlist X?».
+    func answerAppendProposal(add: Bool?) {
+        guard let proposal = appendProposal else { return }
+        appendProposal = nil
+        guard let add else { return }   // Annulla
+        Task { [weak self] in
+            guard let self else { return }
+            guard !self.sendPreparing else { return }
+            self.sendPreparing = true
+            defer { self.sendPreparing = false }
+            if add {
+                await self.perform(t("status_preparing_playlist", proposal.playlistTitle)) {
+                    try await self.prepareExportBody(items: proposal.combined, playlistName: proposal.playlistTitle)
+                }
+            } else {
+                await self.perform(t("status_preparing_files")) {
+                    try await self.prepareExportBody(items: proposal.items, playlistName: nil)
+                }
+            }
         }
     }
 
@@ -2448,6 +2643,9 @@ final class AppViewModel: ObservableObject {
     /// copertine (librerie in rete e ricerca online), poi la finestra di riepilogo.
     func sendTracksToDevice(_ list: [LocalTrack], skipArtworkCheck: Bool = false) async {
         guard ensureDeviceWritable() else { return }
+        guard !sendPreparing else { status = t("status_send_in_progress"); return }
+        sendPreparing = true
+        defer { sendPreparing = false; sendPreparingMessage = nil }
         let items = list.filter { $0.isTransferable }
         guard !items.isEmpty else {
             status = t("status_select_track")
@@ -2461,7 +2659,7 @@ final class AppViewModel: ObservableObject {
                 return
             }
         }
-        if isRemoteNetworkLibraryActive { await loadArtworkNow(items) }
+        if isRemoteNetworkLibraryActive { setPreparingStatus(t("status_analyzing_tracks", items.count)); await loadArtworkNow(items); sendPreparingMessage = nil }
         if !skipArtworkCheck, await askArtworkSearchIfNeeded(for: items, proceed: { [weak self] in
             Task { await self?.sendTracksToDevice(items, skipArtworkCheck: true) }
         }) { return }
@@ -3095,7 +3293,7 @@ final class AppViewModel: ObservableObject {
             // "Artwork originale": quella vera, non una già confermata (vedi `originalArtwork`).
             fetchOriginal: { [weak self] track in await self?.originalArtwork(for: track) },
             fetchOnline: { track in
-                await lookup.search(artist: track.artist, title: track.title, durationSeconds: track.duration)
+                await lookup.search(artist: track.artist, title: track.title, durationSeconds: track.duration, album: track.album)
             },
             // Dopo ogni "Confirm": gli elenchi ricaricano le miniature, cosi la copertina nuova
             // compare subito sul brano e sull'album.
@@ -3106,7 +3304,8 @@ final class AppViewModel: ObservableObject {
                 guard let self else { return [] }
                 // Stesso album = stesso titolo e stesso artista DELL'ALBUM (se manca, quello del brano): un brano con ospiti
                 // («Earth, Wind & Fire Feat. The Emotions») resta nell'album, e le compilation con artisti diversi si riconoscono.
-                func albumOwner(_ t: LocalTrack) -> String { t.albumArtist.isEmpty ? t.artist : t.albumArtist }
+                // Compilation (tag): un unico «proprietario», altrimenti ogni brano di artista diverso resterebbe fuori dall'album.
+                func albumOwner(_ t: LocalTrack) -> String { t.isCompilation ? "\u{1}compilation" : (t.albumArtist.isEmpty ? t.artist : t.albumArtist) }
                 return self.tracks.filter { other in
                     guard other.id != track.id, other.isTransferable,
                           other.album.caseInsensitiveCompare(track.album) == .orderedSame,
@@ -3129,6 +3328,8 @@ final class AppViewModel: ObservableObject {
                 // stata aperta da sola. Se riprende un'azione (invio, Custom Playlist) la selezione serve ancora: svuotarla qui
                 // faceva ripartire l'azione senza brani, e l'invio si fermava senza copiare nulla.
                 if confirmedCount > 0, followUp == nil { self.clearSelection() }
+                // Il brano in riproduzione può aver cambiato copertina: si aggiorna quella del player.
+                if confirmedCount > 0, let playing = self.playerTrack { self.refreshPlayerArtwork(for: playing) }
                 // Azione che aveva fatto proporre la ricerca (es. «Invia alla Playlist»): riprende da sola alla chiusura
                 // del pannello (anche se la copertina era già confermata in passato e quindi non risulta «nuova»).
                 followUp?()
@@ -4575,6 +4776,9 @@ final class AppViewModel: ObservableObject {
     /// playlist di Apple Music.
     func sendCustomPlaylistToDevice(skipArtworkCheck: Bool = false) async {
         guard ensureDeviceWritable() else { return }
+        guard !sendPreparing else { status = t("status_send_in_progress"); return }
+        sendPreparing = true
+        defer { sendPreparing = false; sendPreparingMessage = nil }
         let name = customPlaylistName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else {
             status = t("status_custom_playlist_name_required")
@@ -4604,11 +4808,10 @@ final class AppViewModel: ObservableObject {
         return deviceTracks.contains { $0.relativePath.lowercased() == wanted }
     }
 
-    /// Importa nella Custom Playlist una playlist del dispositivo (menu / pulsante «Edit in Custom»). La Custom prende il
-    /// nome della playlist del device. Ogni brano è abbinato per titolo + artista (senza maiuscole né accenti; con più
-    /// corrispondenze vince quello con lo stesso album) a un brano trasferibile della libreria in uso; se non c'è (o in
-    /// libreria è bloccato: DRM, solo cloud, Hi-Res) resta «solo device» e si usa il file già sul dispositivo.
-    func editDevicePlaylistInCustom(_ group: TrackGroup<DeviceTrack>) {
+    /// Brani di una playlist del dispositivo come `LocalTrack`: abbinati per titolo + artista (con più corrispondenze vince lo
+    /// stesso album) a un brano trasferibile della libreria in uso; se non c'è resta «solo device» (si usa il file già sul dispositivo).
+    /// Con `deviceFilesOnly` nessun abbinamento: tutti i brani restano «solo device» (si fa riferimento ai file già sul dispositivo, senza ricopiarli).
+    func localTracks(fromDevicePlaylist group: TrackGroup<DeviceTrack>, deviceFilesOnly: Bool = false) -> [LocalTrack] {
         func norm(_ text: String) -> String {
             text.folding(options: [.diacriticInsensitive, .caseInsensitive, .widthInsensitive], locale: .current)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4617,8 +4820,8 @@ final class AppViewModel: ObservableObject {
         for track in tracks where track.isTransferable && !track.isDeviceOnly {
             index[norm(track.title) + "|" + norm(track.artist), default: []].append(track)
         }
-        let converted: [LocalTrack] = group.tracks.map { d in
-            let candidates = index[norm(d.title) + "|" + norm(d.artist)] ?? []
+        return group.tracks.map { d in
+            let candidates = deviceFilesOnly ? [] : (index[norm(d.title) + "|" + norm(d.artist)] ?? [])
             if let match = candidates.first(where: { norm($0.album) == norm(d.album) }) ?? candidates.first {
                 return match
             }
@@ -4628,6 +4831,14 @@ final class AppViewModel: ObservableObject {
             only.devicePath = d.relativePath
             return only
         }
+    }
+
+    /// Importa nella Custom Playlist una playlist del dispositivo (menu / pulsante «Edit in Custom»). La Custom prende il
+    /// nome della playlist del device. Ogni brano è abbinato per titolo + artista (senza maiuscole né accenti; con più
+    /// corrispondenze vince quello con lo stesso album) a un brano trasferibile della libreria in uso; se non c'è (o in
+    /// libreria è bloccato: DRM, solo cloud, Hi-Res) resta «solo device» e si usa il file già sul dispositivo.
+    func editDevicePlaylistInCustom(_ group: TrackGroup<DeviceTrack>) {
+        let converted = localTracks(fromDevicePlaylist: group)
         guard !converted.isEmpty else {
             status = t("status_device_playlist_empty", group.title)
             return
@@ -4735,20 +4946,8 @@ final class AppViewModel: ObservableObject {
 
     private func continueAddSelectedTracksToCustomPlaylist() {
         guard !selectedTrackIDs.isEmpty else { return }
-        // Brani di una libreria condivisa senza copertina: prima si propone la ricerca online.
-        let remote = tracks.filter { selectedTrackIDs.contains($0.id) && $0.isTransferable }   // anche la libreria locale
-        guard !remote.isEmpty, AppSettings.shared.proposeSharedArtworkSearch,
-              AppSettings.shared.lookupMissingArtworkOnline else {
-            addSelectedTracksToCustomPlaylistNow()
-            return
-        }
-        Task { [weak self] in
-            guard let self else { return }
-            let asked = await self.askArtworkSearchIfNeeded(for: remote) { [weak self] in
-                self?.addSelectedTracksToCustomPlaylistNow()
-            }
-            if !asked { self.addSelectedTracksToCustomPlaylistNow() }
-        }
+        // Nessuna ricerca online delle copertine qui: si propone una sola volta, all'invio al dispositivo.
+        addSelectedTracksToCustomPlaylistNow()
     }
 
     private func addSelectedTracksToCustomPlaylistNow() {
@@ -5202,7 +5401,7 @@ final class AppViewModel: ObservableObject {
             if try AppleMusicScripting.playlistExists(named: name) {
                 pendingSaveToAppleMusicConflict = SaveToAppleMusicConflict(name: name, tracks: tracks)
             } else {
-                let added = try AppleMusicScripting.createPlaylist(named: name, tracks: tracks)
+                let added = try await musicWrite(name: name, tracks: tracks)
                 status = savedToMusicStatus(name, added: added, expected: tracks.count)
                 // Ricarica la libreria: cosi la playlist appena salvata compare subito nella
                 // scheda Playlist di Apple Music, senza bisogno di un refresh manuale.
@@ -5481,7 +5680,11 @@ final class AppViewModel: ObservableObject {
 
     /// Vero se ha mostrato la domanda (l'azione riprende, se l'utente lo sceglie, con `proceed`).
     private func askArtworkSearchIfNeeded(for items: [LocalTrack], allTracks: Bool = false, proceed: @escaping () -> Void) async -> Bool {
+        // Su librerie di rete il controllo può richiedere diversi secondi: la barra di stato dice cosa sta succedendo.
+        let analyzing = t("status_analyzing_tracks", items.count)
+        if sendPreparing { setPreparingStatus(analyzing) }
         let missing = await missingArtwork(in: items, allTracks: allTracks)
+        if sendPreparing { sendPreparingMessage = nil; if status == analyzing { status = t("status_preparing_files") } }
         guard !missing.isEmpty else { return false }
         artworkProposal = ArtworkProposal(missing: missing, proceed: proceed)
         return true
@@ -5515,7 +5718,7 @@ final class AppViewModel: ObservableObject {
         Task {
             await perform(t("status_saving_to_apple_music", conflict.name), scope: .library) {
                 try AppleMusicScripting.deletePlaylist(named: conflict.name)
-                let added = try AppleMusicScripting.createPlaylist(named: conflict.name, tracks: conflict.tracks)
+                let added = try await musicWrite(name: conflict.name, tracks: conflict.tracks)
                 status = savedToMusicStatus(conflict.name, added: added, expected: conflict.tracks.count)
                 await reloadLibraryAfterMusicWrite()
                 syncCustomPlaylistReferences(afterSavingTo: conflict.name)
@@ -5547,7 +5750,7 @@ final class AppViewModel: ObservableObject {
                     pendingSaveToAppleMusicDuplicates = SaveToAppleMusicDuplicates(
                         name: conflict.name, freshTracks: fresh, duplicateTracks: duplicates)
                 } else {
-                    let added = try AppleMusicScripting.addTracks(fresh, toPlaylistNamed: conflict.name)
+                    let added = try await musicWrite(name: conflict.name, tracks: fresh)
                     status = savedToMusicStatus(conflict.name, added: added, expected: fresh.count)
                     await reloadLibraryAfterMusicWrite()
                     syncCustomPlaylistReferences(afterSavingTo: conflict.name)
@@ -5570,7 +5773,7 @@ final class AppViewModel: ObservableObject {
         pendingSaveToAppleMusicDuplicates = nil
         Task {
             await perform(t("status_saving_to_apple_music", pending.name), scope: .library) {
-                let added = try AppleMusicScripting.addTracks(pending.allTracks, toPlaylistNamed: pending.name)
+                let added = try await musicWrite(name: pending.name, tracks: pending.allTracks)
                 status = savedToMusicStatus(pending.name, added: added, expected: pending.allTracks.count)
                 await reloadLibraryAfterMusicWrite()
                 syncCustomPlaylistReferences(afterSavingTo: pending.name)
@@ -5586,7 +5789,7 @@ final class AppViewModel: ObservableObject {
         guard !pending.freshTracks.isEmpty else { return }
         Task {
             await perform(t("status_saving_to_apple_music", pending.name), scope: .library) {
-                let added = try AppleMusicScripting.addTracks(pending.freshTracks, toPlaylistNamed: pending.name)
+                let added = try await musicWrite(name: pending.name, tracks: pending.freshTracks)
                 status = savedToMusicStatus(pending.name, added: added, expected: pending.freshTracks.count)
                 await reloadLibraryAfterMusicWrite()
                 syncCustomPlaylistReferences(afterSavingTo: pending.name)

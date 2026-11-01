@@ -614,8 +614,11 @@ enum GarminUpdateService {
         // Prova diagnostica: `defaults write com.crdev.MusicManager debugUpdateInteractive -bool YES` chiede al server come se l'utente
         // avesse cliccato «cerca aggiornamenti» (Garmin Express): il server potrebbe nascondere gli aggiornamenti non critici
         // alle richieste automatiche. Si spegne con `defaults delete com.crdev.MusicManager debugUpdateInteractive`.
-        let interactive = UserDefaults.standard.bool(forKey: "debugUpdateInteractive")
-        if interactive { AppLog.debug("Controllo aggiornamento software: richiesta INTERATTIVA (debugUpdateInteractive)") }
+        // 2.3 Beta 2: la richiesta è «interattiva» di serie, come il controllo manuale di Garmin Express: con quella automatica il server
+        // nascondeva il System Software 6.73 (in distribuzione graduale) e proponeva solo un file di servizio. Per tornare alla richiesta
+        // automatica: `defaults write com.crdev.MusicManager debugUpdateInteractive -bool NO`.
+        let interactive = (UserDefaults.standard.object(forKey: "debugUpdateInteractive") as? Bool) ?? true
+        AppLog.debug("Controllo aggiornamento software: richiesta \(interactive ? "INTERATTIVA" : "automatica")")
         guard let xml = String(data: deviceXML, encoding: .utf8),
               let body = try? JSONSerialization.data(withJSONObject: ["GarminDeviceXml": xml, "IsUserInteractive": interactive])
         else { return nil }
@@ -664,14 +667,36 @@ enum GarminUpdateService {
         }
 
         // Solo il firmware (il secondo elemento della risposta, «UpdateMetadata», è un file di servizio).
-        let firmware = updates.filter { ($0["dataType"] as? String)?.lowercased() == "firmware" }
+        // 2.3 Beta 2: se fra gli elementi «Firmware» ce n'è uno «System Software» (il vero aggiornamento del dispositivo) si guarda solo
+        // quello; altrimenti restano tutti i «Firmware» come prima. Il campo `isPrimaryFirmware` NON è affidabile (il «System Software
+        // Bundle» 6.73 del fēnix 9 arriva con `isPrimaryFirmware = 0`). I file di servizio con un numero più basso di quello installato
+        // (per esempio «Map Region Grouping file» 2.31) non danno comunque un falso aggiornamento: più sotto conta solo una versione
+        // più alta dell'installata.
+        let allFirmware = updates.filter { ($0["dataType"] as? String)?.lowercased() == "firmware" }
+        let systemSoftware = allFirmware.filter { u in
+            ((u["productName"] as? String) ?? (u["description"] as? String) ?? "").lowercased().contains("system software")
+        }
+        // Build 38: senza un «System Software» fra gli elementi non si ripiega più su tutti i «Firmware»: il server (log del 29/10) propone
+        // anche file di dati come «Time Zone Map» 43.00 o «Map Region Grouping file» 2.31, con la stessa tipologia «Firmware» ma una
+        // numerazione propria: confrontati con 6.73 davano un falso «aggiornamento 43.00». Si scartano i file di dati noti; se resta
+        // qualcosa lo si tratta come prima (dispositivi i cui nomi non contengono «System Software»).
+        func isDataFile(_ u: [String: Any]) -> Bool {
+            let name = ((u["productName"] as? String) ?? (u["description"] as? String) ?? "").lowercased()
+            return ["map", "time zone", "region", "grouping"].contains { name.contains($0) }
+        }
+        let firmware = systemSoftware.isEmpty ? allFirmware.filter { !isDataFile($0) } : systemSoftware
         func versionText(_ u: [String: Any]) -> String? { (u["displayVersion"] as? String) ?? (u["version"] as? String) }
         let best = firmware.max { (versionText($0) ?? "").compare(versionText($1) ?? "", options: .numeric) == .orderedAscending }
-        guard let best, let version = versionText(best) else { return .upToDate }
-        // Se la versione proposta non è più recente di quella installata, il dispositivo è aggiornato.
-        if let installedVersion, version.compare(installedVersion, options: .numeric) != .orderedDescending {
+        guard let best, let version = versionText(best) else {
+            AppLog.debug("Controllo aggiornamento software: ESITO aggiornato (nessun elemento di software di sistema fra quelli proposti; i file di dati come mappe e fusi orari sono ignorati)")
             return .upToDate
         }
+        // Se la versione proposta non è più recente di quella installata, il dispositivo è aggiornato.
+        if let installedVersion, version.compare(installedVersion, options: .numeric) != .orderedDescending {
+            AppLog.debug("Controllo aggiornamento software: ESITO aggiornato (proposta \(version), installata \(installedVersion))")
+            return .upToDate
+        }
+        AppLog.debug("Controllo aggiornamento software: ESITO aggiornamento disponibile \(version) (installata \(installedVersion ?? "?"))")
         let notes = (best["releaseNotes"] as? [[String: Any]])?
             .compactMap { $0["changeLog"] as? [String] }.flatMap { $0 }.joined(separator: "\n")
         return .available(version: version, notes: (notes?.isEmpty ?? true) ? nil : notes)

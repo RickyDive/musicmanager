@@ -34,14 +34,14 @@ actor ArtworkLookupService {
     }()
 
     /// Numero massimo di copertine diverse proposte per un brano.
-    private static let maxCandidates = 5
+    private static let maxCandidates = 10   // 2.3 Beta 2: prima 5
 
     /// Restituisce i dati JPEG di tutte le copertine diverse trovate per questo brano (la stessa
     /// canzone compare spesso su album, singoli e raccolte diversi, ciascuno con la sua copertina),
     /// nell'ordine proposto dal servizio; array vuoto se non è stata trovata nessuna copertina
     /// abbastanza simile.
-    func search(artist: String, title: String, durationSeconds: TimeInterval) async -> [Data] {
-        let urls = await findCandidateURLs(artist: artist, title: title, durationSeconds: durationSeconds)
+    func search(artist: String, title: String, durationSeconds: TimeInterval, album: String = "") async -> [Data] {
+        let urls = await findCandidateURLs(artist: artist, title: title, album: album, durationSeconds: durationSeconds)
         guard !urls.isEmpty else { return [] }
 
         // Download in parallelo, poi riordino secondo l'ordine originale dei risultati.
@@ -66,41 +66,124 @@ actor ArtworkLookupService {
 
     // MARK: - Ricerca testuale
 
-    private func findCandidateURLs(artist: String, title: String, durationSeconds: TimeInterval) async -> [URL] {
-        let term = "\(artist) \(title)"
-        guard var components = URLComponents(string: "https://itunes.apple.com/search") else { return [] }
+    /// 2.3 Beta 2: confronto più tollerante, con punteggio. Un risultato passa se la durata coincide (entro 4 s, controllo che resta)
+    /// e il titolo coincide **anche togliendo le diciture di versione** («(End Title)», «[Remastered]», «- Remastered 2011»…) e
+    /// l'artista coincide **in modo largo** (uno contenuto nell'altro, o almeno un artista in comune fra quelli separati da «&», «,»,
+    /// «feat.»…), oppure l'album coincide. I risultati con titolo e artista esatti vengono proposti per primi.
+    private func findCandidateURLs(artist: String, title: String, album: String, durationSeconds: TimeInterval) async -> [URL] {
+        var scored: [(url: URL, score: Int, albumMatch: Bool, order: Int)] = []
+        var seenURLs = Set<URL>()
+        var order = 0
+
+        // Prima ricerca: «artista titolo». Seconda (solo se i risultati sono pochi e c'è l'album): «titolo album», che trova i casi in
+        // cui l'artista del brano non coincide con quello del servizio (colonne sonore, raccolte).
+        var terms = ["\(artist) \(title)"]
+        let cleanAlbum = album.trimmingCharacters(in: .whitespacesAndNewlines)
+        for round in 0..<2 {
+            if round == 1 {
+                // Se nessun risultato è dell'album del brano (tipico delle raccolte), si cerca anche «titolo album».
+                guard !scored.contains(where: { $0.albumMatch }), !cleanAlbum.isEmpty else { break }
+                terms.append("\(title) \(cleanAlbum)")
+            }
+            guard let response = await fetch(term: terms[round]) else { continue }
+            AppLog.debug("Fix Artwork online: ricerca «\(terms[round])» (album richiesto «\(cleanAlbum)»): \(response.results.count) risultati")
+            for result in response.results {
+                guard let matched = Self.score(result, artist: artist, title: title, album: cleanAlbum) else { continue }
+                AppLog.debug("Fix Artwork online:   accettato «\(result.artistName ?? "")» — «\(result.trackName ?? "")» — album «\(result.collectionName ?? "")», punteggio \(matched.score), album coincide: \(matched.albumMatch ? "sì" : "no")")
+                if durationSeconds > 0, let millis = result.trackTimeMillis {
+                    let candidateDuration = TimeInterval(millis) / 1000
+                    guard abs(candidateDuration - durationSeconds) <= Self.durationToleranceSeconds else { continue }
+                }
+                guard let artworkUrl100 = result.artworkUrl100,
+                      let highRes = Self.highResolutionURL(from: artworkUrl100),
+                      seenURLs.insert(highRes).inserted else { continue }
+                scored.append((highRes, matched.score, matched.albumMatch, order))
+                order += 1
+            }
+        }
+        // Prima le copertine dell'ALBUM del brano (raccolte, colonne sonore: è quella che si vuole di solito), poi per sicurezza del
+        // confronto, a parità l'ordine del servizio.
+        scored.sort {
+            if $0.albumMatch != $1.albumMatch { return $0.albumMatch }
+            return $0.score != $1.score ? $0.score > $1.score : $0.order < $1.order
+        }
+        return scored.prefix(Self.maxCandidates).map { $0.url }
+    }
+
+    private func fetch(term: String) async -> ITunesSearchResponse? {
+        guard var components = URLComponents(string: "https://itunes.apple.com/search") else { return nil }
         components.queryItems = [
             URLQueryItem(name: "term", value: term),
             URLQueryItem(name: "media", value: "music"),
             URLQueryItem(name: "entity", value: "song"),
-            URLQueryItem(name: "limit", value: "25"),
+            URLQueryItem(name: "limit", value: "50"),   // 2.3 Beta 2: prima 25
         ]
-        guard let url = components.url else { return [] }
-
+        guard let url = components.url else { return nil }
         await throttle()
-        guard let data = try? await session.data(from: url).0,
-              let response = try? JSONDecoder().decode(ITunesSearchResponse.self, from: data) else {
-            return []
+        guard let data = try? await session.data(from: url).0 else { return nil }
+        return try? JSONDecoder().decode(ITunesSearchResponse.self, from: data)
+    }
+
+    /// Punteggio di un risultato: 4 = artista e titolo esatti; 3 = titolo senza diciture di versione e artista largo, con l'album
+    /// uguale; 2 = titolo senza diciture e artista largo; 1 = titolo senza diciture e album uguale (artista diverso). nil = scartato.
+    private static func score(_ result: ITunesSearchResponse.Result, artist: String, title: String, album: String) -> (score: Int, albumMatch: Bool)? {
+        let resultArtist = normalized(result.artistName ?? "")
+        let resultTitle = normalized(result.trackName ?? "")
+        let wantedArtist = normalized(artist)
+        let wantedTitle = normalized(title)
+        let albumMatches = albumsMatch(result.collectionName ?? "", album)
+        if resultArtist == wantedArtist, resultTitle == wantedTitle { return (4, albumMatches) }
+        guard coreTitle(resultTitle) == coreTitle(wantedTitle), !coreTitle(wantedTitle).isEmpty else { return nil }
+        let artistMatches = artistsMatch(resultArtist, wantedArtist)
+        switch (artistMatches, albumMatches) {
+        case (true, true): return (3, true)
+        case (true, false): return (2, false)
+        case (false, true): return (1, true)
+        default: return nil
         }
+    }
 
-        let normalizedArtist = Self.normalized(artist)
-        let normalizedTitle = Self.normalized(title)
+    /// Album compatibili: uguali ignorando maiuscole, accenti, punteggiatura e simboli («®», «™»), diciture di versione fra parentesi
+    /// e ordine delle parole, oppure uno contenuto nell'altro (almeno 6 caratteri).
+    private static func albumsMatch(_ a: String, _ b: String) -> Bool {
+        func key(_ s: String) -> String {
+            let core = coreTitle(normalized(s))
+            let cleaned = core.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? Character($0) : " " }
+            return String(cleaned).components(separatedBy: .whitespaces).filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        let ka = key(a), kb = key(b)
+        guard !ka.isEmpty, !kb.isEmpty else { return false }
+        if ka == kb { return true }
+        if Set(ka.components(separatedBy: " ")) == Set(kb.components(separatedBy: " ")) { return true }
+        return ka.count >= 6 && kb.count >= 6 && (ka.contains(kb) || kb.contains(ka))
+    }
 
-        var urls: [URL] = []
-        for result in response.results {
-            guard Self.normalized(result.artistName ?? "") == normalizedArtist,
-                  Self.normalized(result.trackName ?? "") == normalizedTitle else { continue }
-            if durationSeconds > 0, let millis = result.trackTimeMillis {
-                let candidateDuration = TimeInterval(millis) / 1000
-                guard abs(candidateDuration - durationSeconds) <= Self.durationToleranceSeconds else { continue }
+    /// Titolo senza le diciture di versione: toglie ogni gruppo fra «()» e «[]» e il suffisso dopo « - » (es. «- Remastered 2011»).
+    private static func coreTitle(_ normalizedTitle: String) -> String {
+        var t = normalizedTitle
+        for (open, close) in [("(", ")"), ("[", "]")] {
+            while let a = t.range(of: open), let b = t.range(of: close, range: a.upperBound..<t.endIndex) {
+                t.removeSubrange(a.lowerBound..<b.upperBound)
             }
-            guard let artworkUrl100 = result.artworkUrl100,
-                  let highRes = Self.highResolutionURL(from: artworkUrl100),
-                  !urls.contains(highRes) else { continue }
-            urls.append(highRes)
-            if urls.count >= Self.maxCandidates { break }
         }
-        return urls
+        if let dash = t.range(of: " - ") { t = String(t[..<dash.lowerBound]) }
+        return t.components(separatedBy: .whitespaces).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// Artisti compatibili: uguali, uno contenuto nell'altro, o almeno un nome in comune fra quelli separati da «&», «,», «;», «/»,
+    /// «feat.», «ft.», «featuring», «with», «and».
+    private static func artistsMatch(_ a: String, _ b: String) -> Bool {
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        if a == b { return true }
+        if a.count >= 3, b.count >= 3, a.contains(b) || b.contains(a) { return true }
+        func names(_ s: String) -> Set<String> {
+            var t = s
+            for sep in [" & ", ",", ";", "/", " feat. ", " feat ", " ft. ", " ft ", " featuring ", " with ", " and ", " x "] {
+                t = t.replacingOccurrences(of: sep, with: "|")
+            }
+            return Set(t.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.count >= 2 })
+        }
+        return !names(a).isDisjoint(with: names(b))
     }
 
     /// Normalizza una stringa per il confronto: minuscolo, spazi ridotti, senza accenti/diacritici
@@ -174,5 +257,6 @@ private struct ITunesSearchResponse: Decodable {
         let trackName: String?
         let trackTimeMillis: Int?
         let artworkUrl100: String?
+        let collectionName: String?
     }
 }

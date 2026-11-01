@@ -105,12 +105,12 @@ private enum L {
             .it: "Aggiungere a Music?", .en: "Add to Music?"
         ],
         "alert_music_add_message_drop": [
-            .it: "%d brani non sono nella libreria di Music. Puoi aggiungerli a Music (compariranno anche lì) oppure inviarli solo all'orologio, senza toccare la libreria.",
-            .en: "%d songs are not in your Music library. You can add them to Music (they will appear there too) or send them only to the watch, leaving the library untouched."
+            .it: "%d brani non sono nella libreria di Music. Puoi aggiungerli a Music (compariranno anche lì) oppure inviarli solo all'orologio, senza toccare la libreria. L'aggiunta a Music può richiedere del tempo.",
+            .en: "%d songs are not in your Music library. You can add them to Music (they will appear there too) or send them only to the watch, leaving the library untouched. Adding them to Music may take some time."
         ],
         "alert_music_add_message_custom": [
-            .it: "%d brani della Custom Playlist non sono nella libreria di Music. Salvando la playlist in Music verrebbero aggiunti anche alla libreria: puoi aggiungerli oppure salvare la playlist senza questi brani.",
-            .en: "%d songs of the Custom Playlist are not in your Music library. Saving the playlist to Music would add them to the library too: you can add them, or save the playlist without them."
+            .it: "%d brani della Custom Playlist non sono nella libreria di Music. Salvando la playlist in Music verrebbero aggiunti anche alla libreria: puoi aggiungerli oppure salvare la playlist senza questi brani. L'aggiunta a Music può richiedere del tempo (circa un secondo per brano).",
+            .en: "%d songs of the Custom Playlist are not in your Music library. Saving the playlist to Music would add them to the library too: you can add them, or save the playlist without them. Adding them to Music may take some time (about a second per song)."
         ],
         "alert_music_add_message_playlist": [
             .it: "Verrà creata la playlist «%@» nella cartella «≡♪ Music Manager» di Music. Vuoi continuare?",
@@ -364,6 +364,27 @@ private enum L {
         ],
         "similar_score_help": [
             .it: "Punteggio %@ su un massimo di %@", .en: "Score %@ out of a maximum of %@"
+        ],
+        "alert_append_title": [
+            .it: "Aggiungere alla playlist del dispositivo?", .en: "Add to the device playlist?"
+        ],
+        "alert_append_message": [
+            .it: "Hai selezionato la playlist «%2$@» sul dispositivo. Aggiungere %1$d brani alla playlist? «Solo invia» copia i brani senza toccare la playlist.",
+            .en: "The playlist “%2$@” is selected on the device. Add %1$d tracks to it? “Only send” copies the tracks without touching the playlist."
+        ],
+        "alert_append_message_dup": [
+            .it: "Hai selezionato la playlist «%2$@» sul dispositivo. Aggiungere %1$d brani alla playlist? (%3$d sono già presenti e non vengono ripetuti.) «Solo invia» copia i brani senza toccare la playlist.",
+            .en: "The playlist “%2$@” is selected on the device. Add %1$d tracks to it? (%3$d already in it are not repeated.) “Only send” copies the tracks without touching the playlist."
+        ],
+        "alert_append_add": [
+            .it: "Aggiungi", .en: "Add"
+        ],
+        "alert_append_only_send": [
+            .it: "Solo invia", .en: "Only Send"
+        ],
+        "status_append_all_present": [
+            .it: "I brani scelti sono già tutti nella playlist «%1$@» del dispositivo: nulla da inviare.",
+            .en: "All the selected tracks are already in the device playlist “%1$@”: nothing to send."
         ],
         "alert_tracks_only_title": [
             .it: "Inviare solo i brani?", .en: "Send only the tracks?"
@@ -906,6 +927,48 @@ private enum L {
             .it: "Colore di sfondo delle righe selezionate nelle schede Playlist, Artisti, Album e Brani di Music.",
             .en: "Background color for selected rows on Music's Playlists, Artists, Albums and Songs tabs."
         ],
+        "tooltip_custom_title_first": [.it: "Riga principale: titolo del brano", .en: "Main line: song title"],
+        "tooltip_custom_artist_first": [.it: "Riga principale: artista (per riconoscere gli artisti ripetuti)", .en: "Main line: artist (to spot repeated artists)"],
+        "settings_album_order": [.it: "Visualizza Album", .en: "Show Albums"],
+        "settings_album_order_alpha": [.it: "Alfabetico", .en: "Alphabetical"],
+        "settings_album_order_date": [.it: "Data di aggiunta", .en: "Date added"],
+        "settings_album_order_hint": [
+            .it: "Ordine della scheda Album: alfabetico, oppure gli album aggiunti più di recente per primi (come in Apple Music). Senza data di aggiunta, gli album restano in fondo in ordine alfabetico.",
+            .en: "Order of the Albums tab: alphabetical, or most recently added albums first (like Apple Music). Albums without an added date stay at the end, alphabetically."
+        ],
+        "settings_custom_artist_first": [.it: "Custom Playlist: artista in evidenza", .en: "Custom Playlist: artist first"],
+        "settings_custom_artist_first_hint": [
+            .it: "Nella Custom Playlist la riga principale mostra l'artista; titolo e album passano sulla riga piccola. Utile per riconoscere gli artisti ripetuti.",
+            .en: "In the Custom Playlist the main line shows the artist; title and album move to the small line. Handy to spot repeated artists."
+        ],
+        "custom_dup_artist_help": [.it: "Questo artista compare %d volte nella Custom Playlist", .en: "This artist appears %d times in the Custom Playlist"],
+        "custom_dup_album_help": [.it: "Questo album compare %d volte nella Custom Playlist", .en: "This album appears %d times in the Custom Playlist"],
+        "custom_dup_track_help": [.it: "Questo brano è presente %d volte nella Custom Playlist", .en: "This song is in the Custom Playlist %d times"],
+        "music_save_panel_title": [.it: "Aggiunta a Music in corso…", .en: "Adding to Music…"],
+        "music_save_panel_message": [
+            .it: "Music sta importando i brani: %1$d di %2$d elaborati. L'operazione può richiedere del tempo. L'elenco mostra i brani ancora da aggiungere; quelli già importati restano in Music anche se annulli.",
+            .en: "Music is importing the songs: %1$d of %2$d done. This may take some time. The list shows the songs still to be added; those already imported stay in Music even if you cancel."
+        ],
+        "music_save_progress": [
+            .it: "Salvataggio su Music: %1$d/%2$d brani", .en: "Saving to Music: %1$d/%2$d songs"
+        ],
+        "music_save_cancel": [.it: "Annulla", .en: "Cancel"],
+        "music_save_cancelling": [
+            .it: "Annullamento: finisco il blocco in corso…", .en: "Cancelling: finishing the current batch…"
+        ],
+        "notice_update_available": [
+            .it: "%1$@: aggiornamento software %2$@ disponibile", .en: "%1$@: software update %2$@ available"
+        ],
+        "notice_update_available_installed": [
+            .it: "%1$@: aggiornamento software %2$@ disponibile (installata %3$@)", .en: "%1$@: software update %2$@ available (installed %3$@)"
+        ],
+        "settings_interface_color": [
+            .it: "L'interfaccia usa il colore di selezione", .en: "Interface uses the selection color"
+        ],
+        "settings_interface_color_hint": [
+            .it: "Spento: selettori, pulsanti principali e icone attive seguono il colore di Sistema. Acceso: usano il colore scelto per le righe selezionate.",
+            .en: "Off: switches, main buttons and active icons follow the System color. On: they use the color chosen for selected rows."
+        ],
         "settings_lookup_artwork": [
             .it: "Abilita Fix Artwork (copertine online)", .en: "Enable Fix Artwork (online artwork)"
         ],
@@ -983,6 +1046,14 @@ private enum L {
         "status_refresh_pending": [
             .it: "Il dispositivo è ancora occupato: premi Aggiorna tra qualche istante per vedere l'elenco.",
             .en: "The device is still busy: press Refresh in a moment to see the listing."
+        ],
+        "status_analyzing_tracks": [
+            .it: "Analizzo %1$d brani (copertine e file, anche dalla libreria di rete)… può richiedere qualche secondo.",
+            .en: "Analyzing %1$d tracks (artwork and files, including the network library)… this may take a few seconds."
+        ],
+        "status_send_in_progress": [
+            .it: "Invio già in preparazione: attendi che finisca prima di avviarne un altro.",
+            .en: "A send is already being prepared: wait for it to finish before starting another."
         ],
         "status_preparing_files": [
             .it: "Preparazione dei file in locale…", .en: "Preparing files locally…"
@@ -1428,6 +1499,10 @@ private enum L {
             .it: "Salta", .en: "Skip"
         ],
         "button_ignore": [.it: "Ignora", .en: "Ignore"],
+        "fix_artwork_ignore_help": [
+            .it: "Salta tutto l'album di questo brano senza scegliere una copertina",
+            .en: "Skip this song's whole album without choosing a cover"
+        ],
         "button_back": [.it: "Indietro", .en: "Back"],
         "alert_fix_ok_title": [
             .it: "Non tutte le copertine sono state scelte",
@@ -1626,6 +1701,18 @@ private enum L {
         "artwork_proposal_continue": [
             .it: "Continua senza", .en: "Continue without"
         ],
+        "period_this_week": [
+            .it: "Questa settimana", .en: "This week"
+        ],
+        "period_this_month": [
+            .it: "Questo mese", .en: "This month"
+        ],
+        "period_last_three_months": [
+            .it: "Ultimi tre mesi", .en: "Last three months"
+        ],
+        "period_unknown": [
+            .it: "Senza data", .en: "No date"
+        ],
         "menu_go_to_album": [
             .it: "Vai all'Album", .en: "Go to Album"
         ],
@@ -1792,7 +1879,7 @@ private enum L {
             .it: "Rimuovi", .en: "Remove"
         ],
         "library_local": [
-            .it: "Locale", .en: "Local Library"
+            .it: "Locale", .en: "Local"
         ],
         "library_menu_help": [
             .it: "Libreria da consultare: locale o remota (file XML)", .en: "Library to browse: local or remote (XML file)"

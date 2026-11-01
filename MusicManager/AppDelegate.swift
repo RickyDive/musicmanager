@@ -284,13 +284,15 @@ struct QuitDialogButton {
 /// Stato di una finestra di conferma all'uscita (titolo, messaggio, campo del nome opzionale, pulsanti, scelta finale).
 final class QuitDialogModel: ObservableObject {
     let title: String
-    let message: String
+    @Published var message: String
     let buttons: [QuitDialogButton]
     let showsField: Bool
     @Published var name: String
     @Published var placeholder: String
     /// Elenco opzionale (per esempio i titoli dei brani) sotto il messaggio, in un riquadro scorrevole.
-    var items: [String] = []
+    @Published var items: [String] = []
+    /// Altezza fissa del riquadro dell'elenco (pannello di avanzamento: il pannello non deve cambiare misura mentre l'elenco si accorcia).
+    var itemsHeight: CGFloat?
     /// Indice del pulsante scelto (Esc → il pulsante di annullamento, se c'è).
     var choice = -1
     var finish: (Int) -> Void = { _ in }
@@ -339,7 +341,7 @@ struct QuitDialogView: View {
                     }
                     .padding(8)
                 }
-                .frame(maxHeight: 130)
+                .frame(minHeight: model.itemsHeight, maxHeight: model.itemsHeight ?? 260)   // 2.3 Beta 2: più righe visibili (prima 130)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.12)))
             }
             if model.showsField {
@@ -415,6 +417,34 @@ enum DialogPresenter {
         NSApp.runModal(for: panel)
         panel.orderOut(nil)
         return model.choice
+    }
+}
+
+
+/// Pannello di vetro NON modale (2.3 Beta 2) per un'operazione lunga: resta aperto mentre il lavoro prosegue e lo aggiorna chi
+/// lo ha creato (modello `QuitDialogModel`); si chiude con `orderOut`.
+enum ProgressPanelPresenter {
+    @MainActor static func show(_ model: QuitDialogModel) -> NSPanel {
+        let panel = GlassPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+                               styleMask: [.borderless], backing: .buffered, defer: false)
+        panel.titlebarAppearsTransparent = true
+        panel.titleVisibility = .hidden
+        QuitDialogView.makeGlassPanel(panel)
+        let host = NSHostingView(rootView: QuitDialogView(model: model))
+        host.safeAreaRegions = []
+        panel.contentView = host
+        let size = host.fittingSize
+        panel.setContentSize(size)
+        if let w = MainWindowMetrics.shared.window {
+            panel.setFrameOrigin(NSPoint(x: w.frame.midX - size.width / 2, y: w.frame.midY - size.height / 2))
+        } else {
+            panel.center()
+        }
+        panel.level = .floating
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        DispatchQueue.main.async { panel.invalidateShadow() }
+        return panel
     }
 }
 

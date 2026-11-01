@@ -183,6 +183,10 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         let id = UUID()
     }
     @State private var revealRequest: RevealRequest?
+    /// Selezione di prima di un invio del solo brano cliccato dal menu; si ripristina a invio concluso.
+    @State private var selectionToRestore: Set<Track.ID>?
+    @State private var restoreSawBusy = false
+    @State private var restoreWaitsForClear = false
     /// Richieste «vai a» dal miniplayer (vedi `ExternalRevealRequest`).
     var externalRevealBinding: Binding<ExternalRevealRequest?>? = nil
     /// Riga (id di scorrimento) evidenziata per un attimo dopo «Mostra in playlist»; indipendente dalla selezione.
@@ -205,6 +209,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// non solo quella toccata. Colorata con `AppSettings.highlightColor` via `.listRowBackground`
     /// invece dell'evidenziazione blu di sistema, come nelle altre schede.
     @State private var customPlaylistSelection = Set<UUID>()
+    @State private var customSelectionAnchor: UUID?
     /// Riga radice della Custom Playlist aperta/chiusa.
     @State private var customExpanded = true
     /// Colore di sfondo delle righe selezionate (scelto in Impostazioni con un color picker).
@@ -383,6 +388,18 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         // L'elenco è la vista principale (a tutta altezza); selettore, ricerca e l'eventuale
         // contenuto del pannello stanno nella barra trasparente in alto, i pulsanti in quella in basso.
         content
+            // Invio del solo brano cliccato (fuori dalla selezione): a invio concluso si ripristina la selezione di prima.
+            .onChange(of: rowMenu?.isBusy) { _, busy in
+                guard let busy, selectionToRestore != nil else { return }
+                if busy { restoreSawBusy = true }
+                else if restoreSawBusy, !restoreWaitsForClear { restoreSelectionAfterSingleSend() }
+            }
+            // Invio al dispositivo del solo brano cliccato: appena l'app svuota la selezione a fine copia, si rimette quella di prima.
+            .onChange(of: selection) { _, new in
+                guard restoreWaitsForClear, selectionToRestore != nil else { return }
+                if new.isEmpty { if restoreSawBusy { restoreSelectionAfterSingleSend() } }
+                else if new.count != 1 { selectionToRestore = nil; restoreWaitsForClear = false }   // l'utente ha scelto altro: niente ripristino
+            }
             .onChange(of: externalRevealBinding?.wrappedValue) { _, new in handleExternalReveal(new) }
             .overlay {
                 if dropOverlayActive {
@@ -433,16 +450,10 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             }
     }
 
-    /// Larghezza di ogni scheda del selettore: quella della dicitura più lunga fra tutte le schede
-    /// (nella lingua corrente, di norma "Custom Playlist") più il margine interno.
-    private static var categorySegmentWidth: CGFloat {
-        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        let widest = CatalogCategory.allCases
-            .map { ($0.title as NSString).size(withAttributes: [.font: font]).width }
-            .max() ?? 0
-        // + margine interno + icona (con il suo spazio) a sinistra della dicitura
-        return ceil(widest) + 17 + 17
-    }
+    /// Larghezza di ogni scheda del selettore. 2.3 Beta 2: **fissa** a risoluzione normale (prima era quella della dicitura
+    /// più lunga nella lingua corrente, e la barra cambiava misura passando da italiano a inglese). 80 pt bastano per icona +
+    /// «Playlists» (la dicitura più lunga delle due lingue) con il carattere di sistema.
+    private static var categorySegmentWidth: CGFloat { 80 }
 
     /// Barra delle schede con icona + dicitura. Costruita a mano (non con il `Picker` segmentato):
     /// su macOS il controllo a segmenti di sistema ignora l'icona delle `Label`. Allineata a sinistra,
@@ -462,7 +473,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 Button { category = c } label: {
                     HStack(spacing: 5) {
                         Image(systemName: c.iconName)
-                        if !compactPane { Text(c.title).lineLimit(1) }
+                        if !compactPane { Text(c.title).lineLimit(1).minimumScaleFactor(0.85) }
                     }
                     .help(c.title)
                     .frame(width: width, height: 24)
@@ -488,9 +499,16 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 Group {
                     categoryBar
                     // Filtro per genere: attaccato a destra delle schede (Custom compresa), non più sulla riga della ricerca.
-                    if genreFilterEnabled, category != .customPlaylist, !genreList.isEmpty { genreMenu }
-                    // Ordinamento della Custom Playlist: stesso tipo di pulsante del filtro genere, subito dopo le schede.
-                    if category == .customPlaylist, let customPlaylist { sortMenu(customPlaylist) }
+                    if genreFilterEnabled, category != .customPlaylist, category != .playlists, !genreList.isEmpty { genreMenu }
+                    // «Artista in evidenza» (2.3 Beta 2): pillola con due pulsanti a sola icona (brano / artista, la scelta resta
+                    // evidenziata) e, come terzo segmento, l'ordinamento della Custom Playlist.
+                    if category == .customPlaylist, let customPlaylist {
+                        // Con la Custom vuota non c'è nulla da mostrare né da ordinare: i tre pulsanti sono spenti.
+                        let isEmpty = customPlaylist.entries.isEmpty
+                        artistFirstSwitch(customPlaylist)
+                            .disabled(isEmpty)
+                            .opacity(isEmpty ? 0.4 : 1)
+                    }
                 }
                 .disabled(controlsAreDisabled)
                 Spacer(minLength: 4)
@@ -537,50 +555,113 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         if let genreKey, !genreList.contains(where: { $0.key == genreKey }) { self.genreKey = nil }
     }
 
+    /// Doppio pulsante (icone brano / artista) per scegliere cosa mostrare sulla riga principale della Custom Playlist: lo stesso
+    /// dato dell'interruttore in Impostazioni. La scelta attiva ha il colore di selezione.
+    private func artistFirstSwitch(_ customPlaylist: CustomPlaylistConfig<Track>) -> some View {
+        HStack(spacing: 2) {
+            ForEach([false, true], id: \.self) { artist in
+                Button { settings.customArtistFirst = artist } label: {
+                    Image(systemName: artist ? "person.fill" : "music.note")
+                        .frame(width: 30, height: 24)
+                        .background(settings.customArtistFirst == artist ? settings.highlightColor : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(artist ? t("tooltip_custom_artist_first") : t("tooltip_custom_title_first"))
+                .accessibilityAddTraits(settings.customArtistFirst == artist ? .isSelected : [])
+            }
+            sortMenu(customPlaylist)
+        }
+        .padding(2)
+        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+        .fixedSize()
+    }
+
     /// «Ordina per» della Custom Playlist come pulsante a menu con icona (come il filtro genere): grigia con l'ordine manuale,
     /// blu quando la playlist è ordinata (criterio nel tooltip e con la spunta nel menu). Prima era un menu a tendina con etichetta.
     private func sortMenu(_ customPlaylist: CustomPlaylistConfig<Track>) -> some View {
         let current = customPlaylist.sortOption
-        return Menu {
-            ForEach(CustomPlaylistSortOption.allCases.filter { $0 != .random }) { option in
-                Toggle(option.title, isOn: Binding(get: { current == option }, set: { _ in customPlaylist.onSort(option) }))
+        // Il segmento si disegna da sé (icona e fondo identici a quelli dei due pulsanti accanto) e il menu, trasparente, gli sta sopra:
+        // un menu macOS con etichetta propria non aggiornava l'icona al cambio di ordinamento e scartava il fondo.
+        // Stati: Manuale = icona nera; Titolo/Artista/Album = icona nel colore di selezione; Casuale = fondo nel colore di selezione, icona nera.
+        return Image(systemName: sortIconName(current))
+            .foregroundStyle(sortIconColor(current))
+            .frame(width: 30, height: 24)
+            .background(current == .random ? settings.highlightColor : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                Menu {
+                    ForEach(CustomPlaylistSortOption.allCases.filter { $0 != .random }) { option in
+                        Toggle(option.title, isOn: Binding(get: { current == option }, set: { _ in customPlaylist.onSort(option) }))
+                    }
+                    Divider()
+                    Toggle(CustomPlaylistSortOption.random.title,
+                           isOn: Binding(get: { current == .random }, set: { _ in customPlaylist.onSort(.random) }))
+                } label: {
+                    Color.clear.frame(width: 30, height: 24).contentShape(Rectangle())
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)   // .plain: il clic vale su tutto il segmento, non solo sul centro dell'icona
+                .menuIndicator(.hidden)
+                .frame(width: 30, height: 24)
+                .contentShape(Rectangle())
             }
-            Divider()
-            Toggle(CustomPlaylistSortOption.random.title,
-                   isOn: Binding(get: { current == .random }, set: { _ in customPlaylist.onSort(.random) }))
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.up.arrow.down")
-                    .foregroundStyle(current == .manual ? Color.secondary : Color.blue)
-            }
-        }
-        .menuStyle(.button)
-        .fixedSize()
-        .help(current == .manual ? t("sort_by_label") : t("sort_by_label") + ": " + current.title)
+            .help(current == .manual ? t("sort_by_label") : t("sort_by_label") + ": " + current.title)
     }
 
+    /// Icona dell'ordinamento attivo: frecce per Manuale, le icone delle schede per Titolo (Brani) / Artista / Album, «shuffle» per Casuale.
+    private func sortIconName(_ option: CustomPlaylistSortOption) -> String {
+        switch option {
+        case .manual: return "arrow.up.arrow.down"
+        case .trackName: return CatalogCategory.songs.iconName
+        case .artist: return CatalogCategory.artists.iconName
+        case .album: return CatalogCategory.albums.iconName
+        case .random: return "shuffle"
+        }
+    }
+
+    /// Colore dell'icona di ordinamento: Manuale = come le altre icone della barra; Titolo/Artista/Album = colore di selezione;
+    /// Casuale = nero su fondo nel colore di selezione.
+    private func sortIconColor(_ option: CustomPlaylistSortOption) -> Color {
+        switch option {
+        case .manual: return Color.primary
+        case .random: return Color.black
+        case .trackName, .artist, .album: return settings.selectionSolidColor
+        }
+    }
+
+    /// Filtro per genere (2.3 Beta 2): stessa pillola dell'ordinamento della Custom (un solo segmento, 30 × 24 pt su fondo tenue), con
+    /// l'icona disegnata da noi e il menu trasparente sopra. Icona nera senza filtro, nel colore di selezione con il filtro applicato.
     private var genreMenu: some View {
         let active = genreList.first { $0.key == genreKey }
-        return Menu {
-            // Toggle: nei menu di macOS è l'unico modo affidabile per avere la spunta sulla voce scelta.
-            Toggle(t("genre_all"), isOn: Binding(get: { genreKey == nil }, set: { _ in genreKey = nil }))
-            Divider()
-            ForEach(genreList, id: \.key) { entry in
-                let title = (entry.key.isEmpty ? t("genre_none") : entry.name) + " (\(entry.count))"
-                Toggle(title, isOn: Binding(get: { genreKey == entry.key }, set: { _ in genreKey = entry.key }))
-            }
-        } label: {
-            HStack(spacing: 4) {
-                // Sempre la stessa icona (senza riempimento): grigia senza filtro, blu con il filtro applicato.
-                Image(systemName: "line.3.horizontal.decrease")
-                    .foregroundStyle(active == nil ? Color.secondary : Color.blue)
-            }
+        let color: Color = active == nil ? Color.primary : settings.selectionSolidColor
+        return HStack(spacing: 2) {
+            Image(systemName: "line.3.horizontal.decrease")
+                .foregroundStyle(color)
+                .frame(width: 30, height: 24)
+                .overlay {
+                    Menu {
+                        // Toggle: nei menu di macOS è l'unico modo affidabile per avere la spunta sulla voce scelta.
+                        Toggle(t("genre_all"), isOn: Binding(get: { genreKey == nil }, set: { _ in genreKey = nil }))
+                        Divider()
+                        ForEach(genreList, id: \.key) { entry in
+                            let title = (entry.key.isEmpty ? t("genre_none") : entry.name) + " (\(entry.count))"
+                            Toggle(title, isOn: Binding(get: { genreKey == entry.key }, set: { _ in genreKey = entry.key }))
+                        }
+                    } label: {
+                        Color.clear.frame(width: 30, height: 24).contentShape(Rectangle())
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)   // .plain: il clic vale su tutto il segmento, non solo sul centro dell'icona
+                    .menuIndicator(.hidden)
+                    .frame(width: 30, height: 24)
+                    .contentShape(Rectangle())
+                }
         }
-        .menuStyle(.button)
+        .padding(2)
+        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
         .fixedSize()
-        .disabled(category == .playlists)
-        // Solo l'icona (le descrizioni lunghe spingevano gli altri controlli fuori dal pannello): con il filtro attivo il tooltip
-        // riporta solo il genere scelto; nel menu la voce scelta ha la spunta.
+        // Solo l'icona: con il filtro attivo il tooltip riporta il genere scelto; nel menu la voce scelta ha la spunta.
         .help(active.map { $0.key.isEmpty ? t("genre_none") : $0.name } ?? t("tooltip_genre_filter"))
     }
 
@@ -734,7 +815,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             .onChange(of: typeAheadEvent) { _, event in
                 guard category == .songs, let event else { return }
                 handleTypeAhead(event, entries: items.map { ($0.id, $0.title) }, rowOffset: Self.typeAheadSongRowOffset, proxy: proxy,
-                                fastScroll: { index in directScrollSongs(toItem: index, total: items.count) })
+                                fastScroll: typeAheadFirstLetterOnly ? nil : { index in directScrollSongs(toItem: index, total: items.count) })
             }
             }
     }
@@ -817,14 +898,21 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
 
     /// Come sopra per Album/Artisti: `groupIndex` è l'indice del gruppo da portare in cima; la riga della tabella si ricava
     /// contando le righe dei gruppi precedenti (intestazioni, più i brani/album dei gruppi aperti).
+    /// Righe «Disco n di m» di un album aperto (0 se ha un solo disco): sono righe della tabella e vanno contate.
+    private func discRowCount(_ g: TrackGroup<Track>) -> Int {
+        let discs = Set(g.tracks.map { max($0.discNumber, 1) })
+        let total = max(g.tracks.map(\.discCount).max() ?? 0, discs.count)
+        return (discs.count > 1 || total > 1) ? discs.count : 0
+    }
+
     private func directScrollGroups(_ groups: [TrackGroup<Track>], toGroup groupIndex: Int, tracker: ScrollLetterTracker) -> Bool {
         var row = 1
         var total = 2
         for (i, g) in groups.enumerated() {
             var n = 1
             if expandedGroups.contains(g.id) {
-                if g.subgroups.isEmpty { n += g.tracks.count }
-                else { n += g.subgroups.reduce(0) { $0 + 1 + (expandedGroups.contains($1.id) ? $1.tracks.count : 0) } }
+                if g.subgroups.isEmpty { n += g.tracks.count + (category == .albums ? discRowCount(g) : 0) }
+                else { n += g.subgroups.reduce(0) { $0 + 1 + (expandedGroups.contains($1.id) ? $1.tracks.count + discRowCount($1) : 0) } }
             }
             if i < groupIndex { row += n }
             total += n
@@ -895,8 +983,292 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         switch category {
         case .albums: return filteredAlbums
         case .artists: return filteredArtists
-        case .playlists: return filteredPlaylists
+        case .playlists: return filteredPlaylists.filter(isInOpenFolders)
         default: return []
+        }
+    }
+
+    /// Playlist nelle cartelle di Musica: con una ricerca in corso tutte le cartelle sono aperte.
+    private func folderOpen(_ id: String) -> Bool { !query.isEmpty || expandedGroups.contains("folder:\(id)") }
+    private func isInOpenFolders(_ group: TrackGroup<Track>) -> Bool { group.folderPath.allSatisfy { folderOpen($0.id) } }
+
+    /// Albero delle playlist locali: cartelle di Musica (con i loro contenuti) e playlist. Senza cartelle è un elenco piatto.
+    private struct TreeNode: Identifiable {
+        let id: String
+        let folder: FolderRef?
+        let group: TrackGroup<Track>?
+        var children: [TreeNode]
+    }
+
+    private func playlistTree(_ groups: [TrackGroup<Track>]) -> [TreeNode] {
+        // I gruppi arrivano in ordine «a profondità» (ogni cartella seguita dal suo contenuto): basta guardare l'ultimo nodo.
+        func insert(_ g: TrackGroup<Track>, into nodes: inout [TreeNode], depth: Int) {
+            if depth >= g.folderPath.count {
+                nodes.append(TreeNode(id: g.id, folder: nil, group: g, children: []))
+                return
+            }
+            let ref = g.folderPath[depth]
+            if nodes.isEmpty || nodes[nodes.count - 1].folder != ref {
+                nodes.append(TreeNode(id: "folder:\(ref.id)", folder: ref, group: nil, children: []))
+            }
+            insert(g, into: &nodes[nodes.count - 1].children, depth: depth + 1)
+        }
+        var roots: [TreeNode] = []
+        for g in groups { insert(g, into: &roots, depth: 0) }
+        return roots
+    }
+
+    private func folderBinding(_ id: String) -> Binding<Bool> {
+        Binding(get: { folderOpen(id) },
+                set: { newValue in
+                    guard query.isEmpty else { return }   // con una ricerca in corso le cartelle restano aperte
+                    if newValue { expandedGroups.insert("folder:\(id)") } else { expandedGroups.remove("folder:\(id)") }
+                })
+    }
+
+    /// Miniatura di una playlist (32 pt, come gli album): ingranaggio per le smart/Genius (il contenuto cambia con le regole);
+    /// per le altre mosaico 2×2 con le copertine di quattro album diversi, o la copertina del primo brano se gli album sono meno di quattro.
+    @ViewBuilder
+    private func playlistThumbnail(_ group: TrackGroup<Track>) -> some View {
+        if group.isSmart {
+            // Solo il simbolo, senza riquadro, più grande (occupa tutto lo spazio della miniatura).
+            Image(systemName: "gearshape")
+                .font(.system(size: 22))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 32)
+        } else {
+            let picks = mosaicTracks(group)
+            if picks.count >= 4 {
+                VStack(spacing: 2) {
+                    HStack(spacing: 2) { mosaicCell(picks[0]); mosaicCell(picks[1]) }
+                    HStack(spacing: 2) { mosaicCell(picks[2]); mosaicCell(picks[3]) }
+                }
+                .frame(width: 32, height: 32)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else if let first = picks.first {
+                ArtworkThumbnail(track: first, provider: artworkProvider, version: artworkRevision, size: 32,
+                                 placeholderSymbol: "music.note.list")
+            } else {
+                ZStack {
+                    Color.secondary.opacity(0.15)
+                    Image(systemName: "music.note.list").font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+                .frame(width: 32, height: 32)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+        }
+    }
+
+    private func mosaicCell(_ track: Track) -> some View {
+        ArtworkThumbnail(track: track, provider: artworkProvider, version: artworkRevision, size: 15, placeholderSymbol: "music.note")
+    }
+
+    /// Fino a quattro brani di album diversi (tra i primi 300 della playlist) per il mosaico.
+    private func mosaicTracks(_ group: TrackGroup<Track>) -> [Track] {
+        var seen = Set<String>()
+        var out: [Track] = []
+        for track in group.tracks.prefix(300) where seen.insert(track.album.lowercased()).inserted {
+            out.append(track)
+            if out.count == 4 { break }
+        }
+        return out
+    }
+
+    // MARK: Playlist: righe piatte con colonne
+    //
+    // Ogni livello è una colonna larga `colUnit` (16 pt, come l'icona della cartella; la copertina ne occupa due).
+    //  - freccia di apertura: colonna c (c = numero di cartelle che contengono la riga);
+    //  - cartella: icona nella colonna c+1, titolo nella colonna c+3;
+    //  - playlist: copertina subito dopo la freccia (c = 0) oppure nella colonna c+2 (dentro una cartella), titolo dopo la copertina;
+    //  - brano: la copertina parte dove parte il titolo della playlist a cui appartiene.
+
+    private static var colUnit: CGFloat { 16 }
+    /// Altezza del contenuto di ogni riga di Album e Artisti (con il rientro verticale della lista fa 40 pt, l'altezza minima
+    /// impostata): righe tutte uguali, così la tabella non deve misurarle una a una.
+    private static var fixedRowContentHeight: CGFloat { 32 }
+    private static var coverSize: CGFloat { 32 }
+    private static var coverTitleGap: CGFloat { 8 }
+
+    private enum FlatPlaylistRow: Identifiable {
+        case folder(FolderRef, level: Int)
+        case playlist(TrackGroup<Track>, level: Int)
+        case track(TrackGroup<Track>, Track, level: Int)
+
+        var id: String {
+            switch self {
+            case .folder(let f, _): return "folder:\(f.id)"
+            case .playlist(let g, _): return g.id
+            case .track(let g, let t, _): return "\(g.id)#\(t.id)"
+            }
+        }
+    }
+
+    /// Posizione (da sinistra, in pt) della miniatura di una playlist al livello `level`.
+    private static func playlistCoverX(level: Int) -> CGFloat {
+        level == 0 ? colUnit : CGFloat(level + 2) * colUnit
+    }
+    /// Posizione del titolo di una playlist (e della copertina dei suoi brani).
+    private static func playlistTitleX(level: Int) -> CGFloat {
+        playlistCoverX(level: level) + coverSize + coverTitleGap
+    }
+
+    private func flatPlaylistRows(_ nodes: [TreeNode], level: Int = 0) -> [FlatPlaylistRow] {
+        var out: [FlatPlaylistRow] = []
+        for node in nodes {
+            if let folder = node.folder {
+                out.append(.folder(folder, level: level))
+                if folderOpen(folder.id) { out += flatPlaylistRows(node.children, level: level + 1) }
+            } else if let group = node.group {
+                out.append(.playlist(group, level: level))
+                if expandedGroups.contains(group.id) {
+                    for track in group.tracks { out.append(.track(group, track, level: level)) }
+                }
+            }
+        }
+        return out
+    }
+
+    /// Freccia di apertura, nella sua colonna: apre e chiude senza animazione e senza spostare la lista.
+    private func chevronButton(open: Bool, enabled: Bool = true, toggle: @escaping () -> Void) -> some View {
+        Button {
+            ListScrollHandle.keepPositionAfterToggle()
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { toggle() }
+        } label: {
+            Image(systemName: open ? "chevron.down" : "chevron.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: Self.colUnit, height: 24, alignment: .center)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
+    @ViewBuilder
+    private func flatPlaylistRowView(_ row: FlatPlaylistRow, isPlaylists: Bool = true, showArtwork: Bool = false) -> some View {
+        switch row {
+        case .folder(let folder, let level):
+            let open = folderOpen(folder.id)
+            HStack(spacing: 0) {
+                chevronButton(open: open, enabled: query.isEmpty) { folderBinding(folder.id).wrappedValue = !open }
+                Image(systemName: "folder").font(.system(size: 14)).foregroundStyle(.secondary).frame(width: Self.colUnit)
+                Spacer().frame(width: Self.colUnit)
+                Text(folder.name).font(.system(size: settings.listTextSize.points)).fontWeight(.medium).lineLimit(1)
+                Spacer()
+            }
+            .padding(.leading, CGFloat(level) * Self.colUnit)
+            .contentShape(Rectangle())
+            .onTapGesture { if query.isEmpty { folderBinding(folder.id).wrappedValue = !open } }
+            .listRowSeparator(.hidden)
+        case .playlist(let group, let level):
+            let open = expandedGroups.contains(group.id)
+            let gap = Self.playlistCoverX(level: level) - (CGFloat(level) * Self.colUnit + Self.colUnit)
+            HStack(spacing: 0) {
+                chevronButton(open: open) { expandedBinding(group.id).wrappedValue = !open }
+                groupHeaderLabel(group, coverLeading: isPlaylists ? gap : 0, isPlaylists: isPlaylists, showArtwork: showArtwork)
+            }
+            .frame(height: isPlaylists ? nil : Self.fixedRowContentHeight)
+            .padding(.leading, CGFloat(level) * Self.colUnit)
+            .listRowBackground(isGroupFullySelected(group, isPlaylists) ? rowHighlight(settings.highlightColor) : nil)
+        case .track(let group, let track, let level):
+            groupTrackRow(group, track, isPlaylists: isPlaylists, numbered: !isPlaylists, leading: Self.playlistTitleX(level: level))
+                .frame(height: isPlaylists ? nil : Self.fixedRowContentHeight)
+        }
+    }
+
+    /// Contenuto dell'intestazione di un gruppo (miniatura, titolo, sottotitolo, pulsanti, stato «sul dispositivo», clic e menu).
+    /// Lo usano sia la riga con freccia nativa (Artisti, Album) sia la riga piatta delle Playlist; `coverLeading` è il margine
+    /// a sinistra della miniatura delle playlist.
+    @ViewBuilder
+    private func groupHeaderLabel(_ group: TrackGroup<Track>, coverLeading: CGFloat = 0, isPlaylists: Bool, showArtwork: Bool) -> some View {
+        HStack {
+            // Selezione a sinistra (vuota = invisibile, solo ingombro), stato: tutto / parziale.
+            // Playlist: nessun riquadro a sinistra (la copertina parte dove parte l'icona della cartella allo stesso livello);
+            // lo stato di selezione è un piccolo segno sull'angolo della copertina.
+            if isPlaylists {
+                playlistThumbnail(group)
+                    .overlay(alignment: .topLeading) { selectionBadge(group, isPlaylists: true) }
+                    .padding(.leading, coverLeading)
+            } else if showArtwork, let first = group.tracks.first {
+                ArtworkThumbnail(track: first, provider: artworkProvider, version: artworkRevision, size: 32,
+                                 placeholderSymbol: "music.quarternote.3")
+                    .overlay(alignment: .topLeading) { selectionBadge(group, isPlaylists: false) }
+            } else {
+                // Artista (nessuna copertina): riquadro vuoto della stessa misura del mosaico delle playlist, ancora da definire.
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.15))
+                    .frame(width: 32, height: 32)
+                    .overlay(alignment: .topLeading) { selectionBadge(group, isPlaylists: false) }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(group.title).font(.system(size: settings.listTextSize.points)).fontWeight(.medium).lineLimit(1)
+                Text(subtitleText(group)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            purchasedBadge(count: groupStats(group).purchased)
+            // Nessun conteggio a destra: playlist e artisti lo riportano già nel sottotitolo.
+            if isPlaylists, let action = playlistAction {
+                Button(action.title) { action.perform(group) }
+                    .buttonStyle(.link)
+                    .font(.caption)
+            }
+            // Playlist del dispositivo: porta la playlist nella Custom per modificarla.
+            if isPlaylists, let edit = onEditPlaylist {
+                Button { edit(group) } label: {
+                    Label(t("button_edit_in_custom"), systemImage: "square.and.pencil")
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+                .help(t("tooltip_edit_in_custom"))
+            }
+            // Ultima colonna a destra: playlist già inviata (freccia verde). Spazio fisso, per l'allineamento
+            // con i brani; presente solo nelle liste che conoscono lo stato «sul dispositivo».
+            if isPlaylistOnDeviceCheck != nil || isOnDeviceCheck != nil {
+                Group {
+                    if isPlaylists, let onDevice = isPlaylistOnDeviceCheck, onDevice(group) {
+                        Image(systemName: "arrow.right.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, statusIconGreen)
+                            .help(t("artwork_on_device"))
+                    } else if !isPlaylists, isGroupOnDevice(group.tracks) {
+                        // Album (scheda Album) o artista: tutti i suoi brani trasferibili sono già sul dispositivo.
+                        Image(systemName: "arrow.right.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, statusIconGreen)
+                            .help(t("artwork_group_on_device"))
+                    } else {
+                        Color.clear
+                    }
+                }
+                .font(.system(size: 14))
+                .frame(width: 24, alignment: .center)
+            }
+        }
+        // Doppio click sull'intestazione di una playlist: riproduce tutti i suoi brani,
+        // dal primo, nell'ordine in cui la playlist li propone (i pulsanti dentro la riga
+        // gestiscono i propri click).
+        .contentShape(Rectangle())
+        // Click singolo sull'intestazione: come la spunta, inverte la selezione dell'intero gruppo;
+        // il secondo click ravvicinato avvia la riproduzione (vedi `ClickTracker`).
+        .simultaneousGesture(TapGesture().onEnded {
+            if handleRangeClick(group: group, track: nil, isPlaylists: isPlaylists) { return }
+            toggleGroupSelection(group, isPlaylists)
+            if ClickTracker.isDouble("g:\(group.id)"), let first = group.tracks.first {
+                onPlay?(first, group.tracks, PlaybackSource(name: group.title, category: category))
+            }
+        })
+        // Click destro sull'intestazione: Select/Deselect agisce sull'intero gruppo.
+        .contextMenu {
+            contextMenuItems(isSelected: isGroupFullySelected(group, isPlaylists), artworkTracks: { group.tracks }, groupName: group.title, sendCountHint: groupStats(group).count - groupStats(group).blocked, sendIDs: { menuSendIDs(forGroup: group) }) { toggleGroupSelection(group, isPlaylists) }
+            if isPlaylists, let edit = onEditPlaylist {
+                Button { edit(group) } label: {
+                    Label(t("menu_edit_in_custom"), systemImage: "square.and.pencil")
+                        .labelStyle(.titleAndIcon)
+                }
+            }
         }
     }
 
@@ -954,107 +1326,43 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         // Come nei Brani: lista SENZA selezione nativa; seleziona solo la spunta o il click sulla riga (che inverte lo stesso stato).
         List {
             GlassInsetRow(edge: .top)
-            ForEach(groups) { group in
-                DisclosureGroup(isExpanded: expandedBinding(group.id)) {
-                    if group.subgroups.isEmpty {
-                        albumTrackRows(group, isPlaylists: isPlaylists, numbered: listCategory == .albums)
-                    } else {
-                        // Scheda Artisti: Artista → Album → Brani dell'album.
-                        ForEach(group.subgroups) { album in
-                            DisclosureGroup(isExpanded: expandedBinding(album.id)) {
-                                albumTrackRows(album, isPlaylists: false, numbered: true)
-                            } label: {
-                                albumHeader(album)
-                            }
-                            .listRowBackground(isGroupFullySelected(album, false) ? rowHighlight(settings.highlightColor) : nil)
-                        }
-                    }
-                } label: {
-                    HStack {
-                        // Selezione a sinistra (vuota = invisibile, solo ingombro), stato: tutto / parziale.
-                        let selectedCount = pickedCount(group, isPlaylists)
-                        SelectToggleIcon(state: isGroupFullySelected(group, isPlaylists) ? .all
-                                         : (selectedCount > 0 ? .partial : .none), isGroup: true) {
-                            toggleGroupSelection(group, isPlaylists)
-                        }
-                        if showArtwork, let first = group.tracks.first {
-                            ArtworkThumbnail(track: first, provider: artworkProvider, version: artworkRevision, size: 32,
-                                             placeholderSymbol: "music.quarternote.3")
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(group.title).font(.system(size: settings.listTextSize.points)).fontWeight(.medium).lineLimit(1)
-                            Text(subtitleText(group)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer()
-                        purchasedBadge(count: groupStats(group).purchased)
-                        // Nessun conteggio a destra: playlist e artisti lo riportano già nel sottotitolo.
-                        if isPlaylists, let action = playlistAction {
-                            Button(action.title) { action.perform(group) }
-                                .buttonStyle(.link)
-                                .font(.caption)
-                        }
-                        // Playlist del dispositivo: porta la playlist nella Custom per modificarla.
-                        if isPlaylists, let edit = onEditPlaylist {
-                            Button { edit(group) } label: {
-                                Label(t("button_edit_in_custom"), systemImage: "square.and.pencil")
-                                    .labelStyle(.titleAndIcon)
-                            }
-                            .buttonStyle(.link)
-                            .font(.caption)
-                            .help(t("tooltip_edit_in_custom"))
-                        }
-                        // Ultima colonna a destra: playlist già inviata (freccia verde). Spazio fisso, per l'allineamento
-                        // con i brani; presente solo nelle liste che conoscono lo stato «sul dispositivo».
-                        if isPlaylistOnDeviceCheck != nil || isOnDeviceCheck != nil {
-                            Group {
-                                if isPlaylists, let onDevice = isPlaylistOnDeviceCheck, onDevice(group) {
-                                    Image(systemName: "arrow.right.circle")
-                                        .foregroundStyle(statusIconGreen)
-                                        .help(t("artwork_on_device"))
-                                } else if !isPlaylists, isGroupOnDevice(group.tracks) {
-                                    // Album (scheda Album) o artista: tutti i suoi brani trasferibili sono già sul dispositivo.
-                                    Image(systemName: "arrow.right.circle")
-                                        .foregroundStyle(statusIconGreen)
-                                        .help(t("artwork_group_on_device"))
-                                } else {
-                                    Color.clear
-                                }
-                            }
-                            .font(.system(size: 14))
-                            .frame(width: 24, alignment: .center)
-                        }
-                    }
-                    // Doppio click sull'intestazione di una playlist: riproduce tutti i suoi brani,
-                    // dal primo, nell'ordine in cui la playlist li propone (i pulsanti dentro la riga
-                    // gestiscono i propri click).
-                    .contentShape(Rectangle())
-                    // Click singolo sull'intestazione: come la spunta, inverte la selezione dell'intero gruppo;
-                    // il secondo click ravvicinato avvia la riproduzione (vedi `ClickTracker`).
-                    .simultaneousGesture(TapGesture().onEnded {
-                        if handleRangeClick(group: group, track: nil, isPlaylists: isPlaylists) { return }
-                        toggleGroupSelection(group, isPlaylists)
-                        if ClickTracker.isDouble("g:\(group.id)"), let first = group.tracks.first {
-                            onPlay?(first, group.tracks, PlaybackSource(name: group.title, category: category))
-                        }
-                    })
-                    // Click destro sull'intestazione: Select/Deselect agisce sull'intero gruppo.
-                    .contextMenu {
-                        contextMenuItems(isSelected: isGroupFullySelected(group, isPlaylists), artworkTracks: { group.tracks }, groupName: group.title, sendCountHint: groupStats(group).count - groupStats(group).blocked, sendIDs: { menuSendIDs(forGroup: group) }) { toggleGroupSelection(group, isPlaylists) }
-                        if isPlaylists, let edit = onEditPlaylist {
-                            Button { edit(group) } label: {
-                                Label(t("menu_edit_in_custom"), systemImage: "square.and.pencil")
-                                    .labelStyle(.titleAndIcon)
-                            }
-                        }
-                    }
+            if isPlaylists {
+                // Playlist: righe piatte (cartelle, playlist e brani delle playlist aperte), con freccia e rientri disegnati qui.
+                ForEach(flatPlaylistRows(playlistTree(groups))) { row in
+                    flatPlaylistRowView(row)
                 }
-                // Sfondo evidenziato sull'intestazione quando tutti i brani del gruppo sono
-                // selezionati (stesso colore delle righe singole).
-                .listRowBackground(isGroupFullySelected(group, isPlaylists) ? rowHighlight(settings.highlightColor) : nil)
+            } else {
+                // Album e Artisti: come nella 2.2 (DisclosureGroup annidati, righe della tabella native).
+                ForEach(groups) { group in
+                    DisclosureGroup(isExpanded: expandedBinding(group.id)) {
+                        if group.subgroups.isEmpty {
+                            legacyAlbumTrackRows(group, numbered: listCategory == .albums)
+                        } else {
+                            // Scheda Artisti: Artista → Album → Brani dell'album.
+                            ForEach(group.subgroups) { album in
+                                DisclosureGroup(isExpanded: expandedBinding(album.id)) {
+                                    legacyAlbumTrackRows(album, numbered: true)
+                                } label: {
+                                    legacyAlbumHeader(album)
+                                }
+                                .listRowBackground(isGroupFullySelected(album, false) ? rowHighlight(settings.highlightColor) : nil)
+                            }
+                        }
+                    } label: {
+                        legacyGroupLabel(group, showArtwork: showArtwork)
+                    }
+                    // Sfondo evidenziato sull'intestazione quando tutti i brani del gruppo sono selezionati.
+                    .listRowBackground(isGroupFullySelected(group, false) ? rowHighlight(settings.highlightColor) : nil)
+                }
             }
             GlassInsetRow(edge: .bottom)
         }
         .listStyle(.inset)
+        .onChange(of: query) { _, _ in
+            // Ricerca nelle playlist: si aprono anche le playlist trovate per un loro brano (non per il titolo).
+            guard isPlaylists, !query.isEmpty else { return }
+            for g in groups where !g.title.localizedCaseInsensitiveContains(query) { expandedGroups.insert(g.id) }
+        }
         .background(HideNativeSelection())   // la selezione si vede solo col colore scelto, non col blu di sistema
         .scrollContentBackground(.hidden)
         .background { if isPlaylists { ListScrollLocator(handle: scrollHandle) } }
@@ -1065,8 +1373,8 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 // (per gli artisti anche gli album). Con un numero di righe diverso si ripiega su una stima.
                 let rowsOf: (TrackGroup<Track>) -> Int = { g in
                     guard expandedGroups.contains(g.id) else { return 1 }
-                    if g.subgroups.isEmpty { return 1 + g.tracks.count }
-                    return 1 + g.subgroups.reduce(0) { $0 + 1 + (expandedGroups.contains($1.id) ? $1.tracks.count : 0) }
+                    if g.subgroups.isEmpty { return 1 + g.tracks.count + (listCategory == .albums ? discRowCount(g) : 0) }
+                    return 1 + g.subgroups.reduce(0) { $0 + 1 + (expandedGroups.contains($1.id) ? $1.tracks.count + discRowCount($1) : 0) }
                 }
                 let flatTotal = 2 + groups.reduce(0) { $0 + rowsOf($1) }
                 ScrollLetterLocator(tracker: tracker, rowCounts: [flatTotal, groups.count + 2]) { row, numberOfRows in
@@ -1085,7 +1393,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                     } else if numberOfRows > 0 {
                         index = Int(Double(row) / Double(numberOfRows) * Double(groups.count))
                     }
-                    return Self.initial(of: groups[max(0, min(index, groups.count - 1))].title)
+                    let shown = groups[max(0, min(index, groups.count - 1))]
+                    if listCategory == .albums, settings.albumOrder == .dateAdded { return periodLabel(of: shown) }
+                    return Self.initial(of: shown.title)
                 }
             }
         }
@@ -1098,8 +1408,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             // Solo Album e Artisti, e solo nell'elenco visibile (le altre schede restano in vita, nascoste).
             guard isActive, listCategory == .albums || listCategory == .artists, let event else { return }
             let tracker = listCategory == .albums ? albumsLetters : artistsLetters
+            // Scorrimento diretto della tabella (build 29-33) solo con la libreria Local; librerie remote e unità esterne: scrollTo come nella 2.2.
             handleTypeAhead(event, entries: groups.map { ($0.id, $0.title) }, rowOffset: Self.revealRowOffset, proxy: proxy,
-                            fastScroll: { index in directScrollGroups(groups, toGroup: index, tracker: tracker) })
+                            fastScroll: typeAheadFirstLetterOnly ? nil : { index in directScrollGroups(groups, toGroup: index, tracker: tracker) })
         }
         // Il gruppo in riproduzione (playlist, artista o album) si apre da solo, così si vedono i suoi brani e quello in corso.
         // e la lista scorre fino al brano in corso (utile con playlist lunghe).
@@ -1129,16 +1440,182 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         .onChange(of: expandedGroups) { old, new in
             PerfLag.measure("Apertura/chiusura di un gruppo (\(category)): \(groups.count) gruppi, \(new.count) aperti, \(visibleRowCount(groups)) righe visibili")
             guard isActive, settings.autoLoadAppleArtwork, !onlyWithoutCover, let request = onRequestArtwork else { return }
-            for id in new.subtracting(old) {
-                for group in groups {
-                    if group.id == id {
-                        request(group.subgroups.isEmpty ? group.tracks : group.subgroups.compactMap { $0.tracks.first }, false)
-                    } else if let album = group.subgroups.first(where: { $0.id == id }) {
-                        request(album.tracks, false)
+            // Le copertine si richiedono dopo un istante: mentre la tabella sta ancora inserendo le righe, il ridisegno
+            // dovuto alle copertine che arrivano faceva saltare la lista.
+            let opened = new.subtracting(old)
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                for id in opened {
+                    for group in groups {
+                        if group.id == id {
+                            request(group.subgroups.isEmpty ? group.tracks : group.subgroups.compactMap { $0.tracks.first }, false)
+                        } else if let album = group.subgroups.first(where: { $0.id == id }) {
+                            request(album.tracks, false)
+                        }
                     }
                 }
             }
         }
+        }
+    }
+
+    // MARK: Album e Artisti: codice della 2.2
+    //
+    // Le schede Album, Artisti e Brani usano le righe native della 2.2 (DisclosureGroup annidati); il motore a righe piatte
+    // della 2.3 è solo per le Playlist.
+
+    /// Intestazione di un artista o di un album (scheda Album/Artisti), come nella 2.2.
+    @ViewBuilder
+    private func legacyGroupLabel(_ group: TrackGroup<Track>, showArtwork: Bool) -> some View {
+        HStack {
+            // Selezione a sinistra (vuota = invisibile, solo ingombro), stato: tutto / parziale.
+            let selectedCount = group.tracks.filter { isPicked(group, $0, false) }.count
+            SelectToggleIcon(state: isGroupFullySelected(group, false) ? .all
+                             : (selectedCount > 0 ? .partial : .none), isGroup: true) {
+                toggleGroupSelection(group, false)
+            }
+            if showArtwork, let first = group.tracks.first {
+                ArtworkThumbnail(track: first, provider: artworkProvider, version: artworkRevision, size: 32,
+                                 placeholderSymbol: "music.quarternote.3")
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(group.title).font(.system(size: settings.listTextSize.points)).fontWeight(.medium).lineLimit(1)
+                Text(subtitleText(group)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            purchasedBadge(count: group.tracks.filter(\.isPurchased).count)
+            // Ultima colonna a destra: già sul dispositivo (freccia verde). Spazio fisso per l'allineamento con i brani.
+            if isPlaylistOnDeviceCheck != nil || isOnDeviceCheck != nil {
+                Group {
+                    if isGroupOnDevice(group.tracks) {
+                        Image(systemName: "arrow.right.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, statusIconGreen)
+                            .help(t("artwork_group_on_device"))
+                    } else {
+                        Color.clear
+                    }
+                }
+                .font(.system(size: 14))
+                .frame(width: 24, alignment: .center)
+            }
+        }
+        .contentShape(Rectangle())
+        // Click singolo sull'intestazione: come la spunta, inverte la selezione dell'intero gruppo;
+        // il secondo click ravvicinato avvia la riproduzione (vedi `ClickTracker`).
+        .simultaneousGesture(TapGesture().onEnded {
+            if handleRangeClick(group: group, track: nil, isPlaylists: false) { return }
+            toggleGroupSelection(group, false)
+            if ClickTracker.isDouble("g:\(group.id)"), let first = group.tracks.first {
+                onPlay?(first, group.tracks, PlaybackSource(name: group.title, category: category))
+            }
+        })
+        // Click destro sull'intestazione: gli invii e la ricerca copertine agiscono sull'intero gruppo.
+        .contextMenu {
+            contextMenuItems(isSelected: isGroupFullySelected(group, false), artworkTracks: { group.tracks }, groupName: group.title, sendIDs: { menuSendIDs(forGroup: group) }) { toggleGroupSelection(group, false) }
+        }
+    }
+
+    /// Intestazione di un album dentro un artista (scheda Artisti), come nella 2.2.
+    private func legacyAlbumHeader(_ album: TrackGroup<Track>) -> some View {
+        HStack {
+            let selectedCount = album.tracks.filter { isPicked(album, $0, false) }.count
+            SelectToggleIcon(state: isGroupFullySelected(album, false) ? .all
+                             : (selectedCount > 0 ? .partial : .none), isGroup: true) {
+                toggleGroupSelection(album, false)
+            }
+            if let first = album.tracks.first {
+                ArtworkThumbnail(track: first, provider: artworkProvider, version: artworkRevision, size: 28,
+                                 placeholderSymbol: "music.quarternote.3")
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(album.title).font(.system(size: settings.listTextSize.points)).lineLimit(1)
+                Text(subtitleText(album)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            purchasedBadge(count: album.tracks.filter(\.isPurchased).count)
+            if isPlaylistOnDeviceCheck != nil || isOnDeviceCheck != nil {
+                Group {
+                    if isGroupOnDevice(album.tracks) {
+                        Image(systemName: "arrow.right.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, statusIconGreen)
+                            .help(t("artwork_group_on_device"))
+                    } else {
+                        Color.clear
+                    }
+                }
+                .font(.system(size: 14))
+                .frame(width: 24, alignment: .center)
+            }
+        }
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture().onEnded {
+            if handleRangeClick(group: album, track: nil, isPlaylists: false) { return }
+            toggleGroupSelection(album, false)
+            if ClickTracker.isDouble("a:\(album.id)"), let first = album.tracks.first {
+                onPlay?(first, album.tracks, PlaybackSource(name: album.title, category: category))
+            }
+        })
+        .contextMenu {
+            contextMenuItems(isSelected: isGroupFullySelected(album, false), artworkTracks: { album.tracks }, groupName: album.title, sendIDs: { menuSendIDs(forGroup: album) }) { toggleGroupSelection(album, false) }
+        }
+    }
+
+    /// Riga di un brano dentro un album (o un artista), come nella 2.2: quadrato di selezione a sinistra, clic, doppio clic e menu.
+    @ViewBuilder
+    private func legacyGroupTrackRow(_ group: TrackGroup<Track>, _ track: Track, numbered: Bool) -> some View {
+        trackRow(track, number: numbered ? trackNumberLabel(track, in: group) : nil, insideAlbum: numbered) {
+            // Brano non selezionabile (es. solo nel cloud): riquadro invisibile, stesso incolonnamento.
+            SelectToggleIcon(state: isPicked(group, track, false) ? .all : .none, hidden: track.isBlocked) {
+                toggleRow(group, track, false)
+            }
+        }
+        // Brani numerati di un album: rientrati fino al titolo dell'album (stessa x di «Disco n di m»).
+        .padding(.leading, numbered ? Self.albumTitleIndent : 0)
+        .tag("\(track.id)")
+        .selectionDisabled(track.isBlocked)
+        // Identificativo per lo scorrimento automatico (lo stesso brano può stare in più gruppi).
+        .id(rowScrollID(group.id, track.id))
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture().onEnded {
+            if handleRangeClick(group: group, track: track, isPlaylists: false) { return }
+            if !track.isBlocked { toggleRow(group, track, false) }
+            if ClickTracker.isDouble("r:\(rowScrollID(group.id, track.id))") {
+                onPlay?(track, group.tracks, PlaybackSource(name: group.title, category: category))
+            }
+        })
+        .listRowBackground(isPicked(group, track, false) ? rowHighlight(settings.highlightColor)
+                           : (flashRowID == rowScrollID(group.id, track.id) ? rowHighlight(Color.yellow.opacity(0.4)) : nil))
+        .contextMenu {
+            contextMenuItems(isSelected: isPicked(group, track, false), artworkTracks: { group.tracks }, goTo: track, membershipTrack: track, similarSeeds: [track], full: true, focusTrack: track, sendIDs: { menuSendIDs(for: track) }) { toggleRow(group, track, false) }
+        }
+    }
+
+    /// Brani di un album (o di un artista senza album). Con più dischi, prima dei brani di ogni disco c'è una riga
+    /// «Disco n di m» (non selezionabile) e i brani riportano solo il numero di traccia.
+    @ViewBuilder
+    private func legacyAlbumTrackRows(_ album: TrackGroup<Track>, numbered: Bool) -> some View {
+        let discs = Set(album.tracks.map { max($0.discNumber, 1) })
+        let totalDiscs = max(album.tracks.map(\.discCount).max() ?? 0, discs.count)
+        if numbered && (discs.count > 1 || totalDiscs > 1) {
+            ForEach(album.tracks) { track in
+                let disc = max(track.discNumber, 1)
+                if album.tracks.first(where: { max($0.discNumber, 1) == disc })?.id == track.id {
+                    Text(t("disc_n_of_m", disc, totalDiscs))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, Self.albumTitleIndent)   // allineata all'inizio del titolo dell'album
+                        .padding(.top, 4)
+                        .selectionDisabled(true)
+                        .listRowSeparator(.hidden)
+                }
+                legacyGroupTrackRow(album, track, numbered: numbered)
+            }
+        } else {
+            ForEach(album.tracks) { track in
+                legacyGroupTrackRow(album, track, numbered: numbered)
+            }
         }
     }
 
@@ -1158,20 +1635,15 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// Oggetto di "secondo livello": ha anche lui il proprio quadrato di selezione, indipendente da
     /// quello dell'intestazione, così la selezione multipla può prendere singoli brani da dentro un gruppo.
     @ViewBuilder
-    private func groupTrackRow(_ group: TrackGroup<Track>, _ track: Track, isPlaylists: Bool, numbered: Bool = false) -> some View {
+    private func groupTrackRow(_ group: TrackGroup<Track>, _ track: Track, isPlaylists: Bool, numbered: Bool = false, leading: CGFloat = 36) -> some View {
         // Oggetto di "secondo livello" (il brano dentro l'album/artista/playlist):
         // ha anche lui il proprio Select/Deseleziona, indipendente da quello
         // dell'intestazione — cosi la selezione multipla può prendere singoli
         // brani da dentro un gruppo, non solo il gruppo intero.
-        trackRow(track, number: numbered ? trackNumberLabel(track, in: group) : nil, insideAlbum: numbered) {
-            // Playlist del dispositivo: nessuna selezione dei singoli brani (si sceglie solo la playlist).
-            if !(isPlaylists && disablesTrackSelectionInPlaylists) {
-                // Brano non selezionabile (es. solo nel cloud): riquadro invisibile, stesso incolonnamento.
-                SelectToggleIcon(state: isPicked(group, track, isPlaylists) ? .all : .none, hidden: track.isBlocked) {
-                    toggleRow(group, track, isPlaylists)
-                }
-            }
-        }
+        // Nessun segno sul singolo brano: lo dice l'evidenziazione della riga; lo stato del gruppo è sulla copertina dell'intestazione.
+        trackRow(track, number: numbered ? trackNumberLabel(track, in: group) : nil, insideAlbum: numbered) { EmptyView() }
+        // Rientro rispetto alla copertina dell'intestazione, così il brano si legge come contenuto del gruppo aperto.
+        .padding(.leading, leading)
         .tag(isPlaylists ? pickKey(group, track) : "\(track.id)")
         .selectionDisabled((isPlaylists && disablesTrackSelectionInPlaylists) || track.isBlocked)
         // Identificativo per lo scorrimento automatico (lo stesso brano può stare in più gruppi).
@@ -1196,33 +1668,6 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// Etichetta del numero di traccia dentro un album: "5" con un solo disco, "Disco/Traccia" (es. "2/05")
     /// solo se l'album ha più di un disco; nil se nessun brano dell'album ha il numero (es. il dispositivo):
     /// resta la copertina.
-    /// Brani di un gruppo. Se è un album con più dischi, prima dei brani di ogni disco c'è una riga d'intestazione
-    /// «Disco 1 di n» (non selezionabile) e i brani riportano solo il numero di traccia (01, 02…).
-    @ViewBuilder
-    private func albumTrackRows(_ album: TrackGroup<Track>, isPlaylists: Bool, numbered: Bool) -> some View {
-        let discs = Set(album.tracks.map { max($0.discNumber, 1) })
-        let totalDiscs = max(album.tracks.map(\.discCount).max() ?? 0, discs.count)
-        if numbered && !isPlaylists && (discs.count > 1 || totalDiscs > 1) {
-            ForEach(album.tracks) { track in
-                let disc = max(track.discNumber, 1)
-                if album.tracks.first(where: { max($0.discNumber, 1) == disc })?.id == track.id {
-                    Text(t("disc_n_of_m", disc, totalDiscs))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 34)   // sotto la colonna di selezione, allineata al numero di traccia
-                        .padding(.top, 4)
-                        .selectionDisabled(true)
-                        .listRowSeparator(.hidden)
-                }
-                groupTrackRow(album, track, isPlaylists: isPlaylists, numbered: numbered)
-            }
-        } else {
-            ForEach(album.tracks) { track in
-                groupTrackRow(album, track, isPlaylists: isPlaylists, numbered: numbered)
-            }
-        }
-    }
-
     private func trackNumberLabel(_ track: Track, in album: TrackGroup<Track>) -> String? {
         guard album.tracks.contains(where: { $0.trackNumber > 0 }) else { return nil }
         let multiDisc = Set(album.tracks.map { max($0.discNumber, 1) }).count > 1
@@ -1232,54 +1677,15 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         return track.trackNumber > 0 ? String(format: "%02d", track.trackNumber) : "–"
     }
 
-    /// Intestazione di un album dentro un artista (scheda Artisti): copertina, titolo, quadrato di selezione.
-    private func albumHeader(_ album: TrackGroup<Track>) -> some View {
-        HStack {
-            let selectedCount = pickedCount(album, false)
-            SelectToggleIcon(state: isGroupFullySelected(album, false) ? .all
-                             : (selectedCount > 0 ? .partial : .none), isGroup: true) {
-                toggleGroupSelection(album, false)
-            }
-            if let first = album.tracks.first {
-                ArtworkThumbnail(track: first, provider: artworkProvider, version: artworkRevision, size: 28,
-                                 placeholderSymbol: "music.quarternote.3")
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(album.title).font(.system(size: settings.listTextSize.points)).lineLimit(1)
-                Text(subtitleText(album)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer()
-            purchasedBadge(count: groupStats(album).purchased)
-            // Nessun conteggio a destra: il numero di brani è già nel sottotitolo.
-            // Colonna a destra (come nelle altre righe): freccia verde se tutti i brani trasferibili dell'album
-            // sono già sul dispositivo (2.1 Beta 3), altrimenti vuota.
-            if isPlaylistOnDeviceCheck != nil || isOnDeviceCheck != nil {
-                Group {
-                    if isGroupOnDevice(album.tracks) {
-                        Image(systemName: "arrow.right.circle")
-                            .foregroundStyle(statusIconGreen)
-                            .help(t("artwork_group_on_device"))
-                    } else {
-                        Color.clear
-                    }
-                }
-                .font(.system(size: 14))
-                .frame(width: 24, alignment: .center)
-            }
-        }
-        .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture().onEnded {
-            if handleRangeClick(group: album, track: nil, isPlaylists: false) { return }
-            toggleGroupSelection(album, false)
-            if ClickTracker.isDouble("a:\(album.id)"), let first = album.tracks.first {
-                onPlay?(first, album.tracks, PlaybackSource(name: album.title, category: category))
-            }
-        })
-        .contextMenu {
-            contextMenuItems(isSelected: isGroupFullySelected(album, false), artworkTracks: { album.tracks }, groupName: album.title, sendCountHint: groupStats(album).count - groupStats(album).blocked, sendIDs: { menuSendIDs(forGroup: album) }) { toggleGroupSelection(album, false) }
+    /// Segno di selezione sull'angolo della copertina di un gruppo: spunta (tutto) o trattino (parziale); nulla se non selezionato.
+    @ViewBuilder
+    private func selectionBadge(_ group: TrackGroup<Track>, isPlaylists: Bool) -> some View {
+        if isGroupFullySelected(group, isPlaylists) {
+            SelectionMark(partial: false).offset(x: -5, y: -5)
+        } else if pickedCount(group, isPlaylists) > 0 {
+            SelectionMark(partial: true).offset(x: -5, y: -5)
         }
     }
-
 
     /// Vero se un album o un artista è già per intero sul dispositivo (2.1 Beta 3, logica A): tutti i brani con
     /// «sul dispositivo» vero. Esclusi dal conteggio i brani non trasferibili (con avviso: DRM, solo cloud, Hi-Res);
@@ -1297,7 +1703,21 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
 
     private func expandedBinding(_ id: String) -> Binding<Bool> {
         Binding(get: { expandedGroups.contains(id) },
-                set: { if $0 { expandedGroups.insert(id) } else { expandedGroups.remove(id) } })
+                set: { isOpen in
+                    // La tabella può richiamare questo setter anche senza che l'utente tocchi il triangolo (es. ridisegnando le righe
+                    // mentre si scorre) con lo stesso valore: in quel caso non si fa nulla, altrimenti la posizione ripristinata
+                    // riporterebbe la lista indietro mentre si scorre.
+                    guard isOpen != expandedGroups.contains(id) else { return }
+                    // Aprire o chiudere un gruppo con il triangolo non deve spostare la lista: si ricorda la posizione.
+                    ListScrollHandle.keepPositionAfterToggle()
+                    // Senza animazione: con tanti album l'animazione di inserimento righe della tabella nativa le disegna fuori
+                    // posto e fa saltare la lista.
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        if isOpen { expandedGroups.insert(id) } else { expandedGroups.remove(id) }
+                    }
+                })
     }
 
     /// Passa alla scheda Album o Artisti per mostrare il brano scelto nella scheda Brani.
@@ -1312,6 +1732,20 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
 
     /// Iniziale mostrata accanto al cursore di scorrimento: la prima lettera del titolo senza accenti, maiuscola; «#» per
     /// numeri e simboli.
+    /// Etichetta per la scheda Album ordinata per «Data di aggiunta» (come Musica): questa settimana, questo mese, ultimi tre mesi,
+    /// poi l'anno. La data di un album è quella del suo brano aggiunto per ultimo.
+    private func periodLabel(of group: TrackGroup<Track>) -> String {
+        let latest = group.tracks.reduce(0.0) { Swift.max($0, $1.dateAdded) }
+        guard latest > 0 else { return t("period_unknown") }
+        let date = Date(timeIntervalSince1970: latest)
+        let calendar = Calendar.current
+        let now = Date()
+        if calendar.isDate(date, equalTo: now, toGranularity: .weekOfYear) { return t("period_this_week") }
+        if calendar.isDate(date, equalTo: now, toGranularity: .month) { return t("period_this_month") }
+        if let limit = calendar.date(byAdding: .month, value: -3, to: now), date >= limit { return t("period_last_three_months") }
+        return String(calendar.component(.year, from: date))
+    }
+
     private static func initial(of title: String) -> String {
         let folded = title.trimmingCharacters(in: .whitespaces)
             .folding(options: [.diacriticInsensitive, .caseInsensitive, .widthInsensitive], locale: .current)
@@ -1330,34 +1764,21 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// di primo livello, poi la riga, con ripetizioni perché l'apertura cambia l'altezza della lista).
     private func performRevealInPlaylist(_ request: RevealRequest, in groups: [TrackGroup<Track>], proxy: ScrollViewProxy) {
         guard let playlistID = request.playlistID,
-              let index = groups.firstIndex(where: { $0.id == playlistID }) else { return }
-        let group = groups[index]
+              let group = groups.first(where: { $0.id == playlistID }) else { return }
         expandedGroups.insert(group.id)
-        let scrollTop = groups[max(0, index - Self.revealRowOffset)].id
+        for folder in group.folderPath { expandedGroups.insert("folder:\(folder.id)") }
         let target = rowScrollID(group.id, request.trackID)
-        let trackIndex = group.tracks.firstIndex { $0.id == request.trackID } ?? 0
-        // Le righe annidate in un DisclosureGroup aperto da codice non sono raggiungibili con `scrollTo` per id: si
-        // scorre la tabella AppKit fino alla riga del brano. Le righe non ancora mostrate hanno un'altezza stimata, quindi
-        // si procede per passi: ci si avvicina alla posizione stimata e si riprova finché la riga del brano è davvero
-        // presente nella vista (allora la si porta al centro).
-        let scrollToTrack: @MainActor () -> ListScrollHandle.Result = {
-            var rowsBefore = 1
-            var flatTotal = 2
-            for (i, g) in groups.enumerated() {
-                let n = 1 + (expandedGroups.contains(g.id) ? g.tracks.count : 0)
-                if i < index { rowsBefore += n }
-                flatTotal += n
-            }
-            return scrollHandle.scroll(flatRow: rowsBefore + 1 + trackIndex, flatTotal: flatTotal,
-                                       blockRow: 1 + index, blockTotal: groups.count + 2,
-                                       childIndex: trackIndex, childCount: group.tracks.count)
-        }
+        // Le righe delle playlist sono righe piatte della lista: si scorre la tabella AppKit fino alla riga del brano. Le righe
+        // non ancora mostrate hanno un'altezza stimata, quindi si procede per passi (ci si avvicina e si riprova) finché la
+        // riga è davvero presente nella vista e la si porta al centro. Se la tabella non è riconosciuta, `scrollTo` per id.
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
-            withAnimation { proxy.scrollTo(scrollTop, anchor: .top) }
             for _ in 0..<40 {
                 try? await Task.sleep(nanoseconds: 200_000_000)
-                let result = scrollToTrack()
+                let rows = flatPlaylistRows(playlistTree(groups))
+                guard let rowIndex = rows.firstIndex(where: { $0.id == target }) else { continue }
+                let result = scrollHandle.scroll(flatRow: rowIndex + 1, flatTotal: rows.count + 2,
+                                                 blockRow: -1, blockTotal: -1, childIndex: 0, childCount: 0)
                 if result == .failed { withAnimation { proxy.scrollTo(target, anchor: .center) } }
                 if result != .moved { break }
             }
@@ -1396,9 +1817,8 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         // I pannelli sovrapposti alla lista coprono le prime righe: si scorre fino a un gruppo che sta 8
         // posizioni prima di quello cercato, così questo si ferma sotto i pannelli e non dietro di essi.
         let scrollTop = groups[max(0, topIndex - Self.revealRowOffset)].id
-        // Le righe annidate dentro i gruppi aperti da codice non sono raggiungibili con `scrollTo` (la List non
-        // le conosce come proprie righe): si scorre fino al gruppo di primo livello (album, o artista), con la
-        // sua identità naturale nella ForEach, ripetendo perché l'apertura cambia l'altezza della lista.
+        // Le righe annidate dentro i gruppi aperti da codice non sono raggiungibili con `scrollTo`: si scorre fino al gruppo
+        // di primo livello (album, o artista), ripetendo perché l'apertura cambia l'altezza della lista.
         Task { @MainActor in
             for delay in [300_000_000, 500_000_000] as [UInt64] {
                 try? await Task.sleep(nanoseconds: delay)
@@ -1409,6 +1829,8 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
 
     /// Righe di scostamento sopra il risultato di "Vai all'Album/Artista" (pannelli sovrapposti alla lista).
     private static var revealRowOffset: Int { 8 }
+    /// Rientro del titolo dell'album rispetto al bordo della riga: colonna di selezione (20) + cover (28) + due spaziature (8+8).
+    private static var albumTitleIndent: CGFloat { SelectToggleIcon.columnWidth + 28 + 16 }
     /// Come sopra per l'elenco Brani (righe più basse di quelle di Album/Artisti, quindi più righe per coprire lo stesso spazio).
     private static var typeAheadSongRowOffset: Int { 12 }
 
@@ -1419,6 +1841,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         var found: TrackGroup<Track>?
         if let group = groups.first(where: { $0.title == source.name }) {
             expandedGroups.insert(group.id)
+            for folder in group.folderPath { expandedGroups.insert("folder:\(folder.id)") }
             found = group
         } else {
             for group in groups {
@@ -1627,8 +2050,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             .disabled(sendCount == 0 || menu.isBusy)
             if let focusID {
                 Button {
-                    selection = [focusID]
-                    menu.sendToPlaylist()
+                    sendOnly(focusID) { menu.sendToPlaylist() }
                 } label: {
                     Label(t("menu_send_one_to_custom", focusName), systemImage: "tray.and.arrow.down")
                         .labelStyle(.titleAndIcon)
@@ -1649,8 +2071,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             .disabled(sendCount == 0 || menu.isBusy || !menu.canSendToDevice)
             if let focusID {
                 Button {
-                    selection = [focusID]
-                    menu.sendToDevice()
+                    sendOnly(focusID, toDevice: true) { menu.sendToDevice() }
                 } label: {
                     Label(t("menu_send_one_to_device", focusName), systemImage: "arrow.right.circle.fill")
                         .labelStyle(.titleAndIcon)
@@ -1658,7 +2079,20 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 .disabled(menu.isBusy || !menu.canSendToDevice)
             }
 
-            // Menu completo solo su un brano; su playlist, artista, album solo i due invii.
+            // Su playlist, artista e album (intestazioni): oltre ai due invii, la ricerca online delle copertine per tutti i loro brani.
+            if !full, groupName != nil, menu.canFixArtwork {
+                Divider()
+                Button {
+                    selection = sendIDs()
+                    menu.fixArtwork()
+                } label: {
+                    Label(t("menu_artwork_online_fix"), systemImage: "waveform.badge.magnifyingglass")
+                        .labelStyle(.titleAndIcon)
+                }
+                .disabled(sendCount == 0 || menu.isBusy)
+            }
+
+            // Menu completo solo su un brano; su playlist, artista, album solo gli invii e la ricerca copertine.
             if full {
                 Divider()
 
@@ -1684,14 +2118,19 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 Divider()
 
                 // Salta all'album o all'artista del brano, aprendoli e scorrendo fino a lui.
+                // Nella scheda Album non serve «Mostra in Album», in quella Artisti non serve «Mostra in Artisti».
                 if let goTo {
-                    Button { reveal(goTo, in: .albums) } label: {
-                        Label(t("menu_go_to_album"), systemImage: "music.pages")
-                            .labelStyle(.titleAndIcon)
+                    if category != .albums {
+                        Button { reveal(goTo, in: .albums) } label: {
+                            Label(t("menu_go_to_album"), systemImage: "music.pages")
+                                .labelStyle(.titleAndIcon)
+                        }
                     }
-                    Button { reveal(goTo, in: .artists) } label: {
-                        Label(t("menu_go_to_artist"), systemImage: "microphone.dynamic.on.stand")
-                            .labelStyle(.titleAndIcon)
+                    if category != .artists {
+                        Button { reveal(goTo, in: .artists) } label: {
+                            Label(t("menu_go_to_artist"), systemImage: "microphone.dynamic.on.stand")
+                                .labelStyle(.titleAndIcon)
+                        }
                     }
                 }
                 // «Trova simili»: finestra con i brani della libreria più simili al brano.
@@ -1769,10 +2208,35 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         count == 1 ? t("menu_one_song") : t("menu_n_songs", count)
     }
 
-    /// Brani da inviare dal menu su un brano: la selezione, se il brano ne fa parte; altrimenti solo lui.
+    /// Brani da inviare dal menu su un brano: la selezione, a cui si aggiunge il brano cliccato se non ne fa parte
+    /// (la selezione precedente non va persa).
+    /// Invia solo `id` dal menu e poi rimette la selezione precedente (l'invio legge la selezione, quindi la si ripristina alla fine).
+    private func sendOnly(_ id: Track.ID, toDevice: Bool = false, _ action: @escaping () -> Void) {
+        selectionToRestore = selection
+        restoreSawBusy = false
+        restoreWaitsForClear = toDevice
+        selection = [id]
+        action()
+        // Se l'invio non diventa mai «occupato» (operazione istantanea) si ripristina comunque dopo un attimo.
+        if !toDevice {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if !restoreSawBusy { restoreSelectionAfterSingleSend() }
+            }
+        }
+    }
+
+    private func restoreSelectionAfterSingleSend() {
+        guard let previous = selectionToRestore else { return }
+        selectionToRestore = nil
+        restoreSawBusy = false
+        restoreWaitsForClear = false
+        selection = previous
+    }
+
     private func menuSendIDs(for track: Track) -> Set<Track.ID> {
-        if selection.contains(track.id) { return selection }
-        return !track.isBlocked ? [track.id] : []
+        if selection.contains(track.id) || track.isBlocked { return selection }
+        return selection.union([track.id])
     }
 
     /// Brani da inviare dal menu su un gruppo (playlist, artista, album): tutti i suoi brani trasferibili.
@@ -1809,7 +2273,26 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         let shown = customQuery.isEmpty ? config.entries : config.entries.filter { matches($0.track, for: customQuery) }
         let listName = config.name.isEmpty ? CatalogCategory.customPlaylist.title : config.name
         let source = PlaybackSource(name: listName, category: .customPlaylist)
-        return List(selection: $customPlaylistSelection) {
+        // Ricorrenze nella Custom (2.3 Beta 2): stesso artista, stesso album, stesso brano inserito più volte.
+        var artistCounts: [String: Int] = [:], albumCounts: [String: Int] = [:], trackCounts: [String: Int] = [:]
+        for entry in config.entries {
+            let artist = entry.track.artist.trimmingCharacters(in: .whitespaces).lowercased()
+            if !artist.isEmpty { artistCounts[artist, default: 0] += 1 }
+            let album = entry.track.album.trimmingCharacters(in: .whitespaces).lowercased()
+            if !artist.isEmpty, !album.isEmpty { albumCounts[artist + "\u{1}" + album, default: 0] += 1 }
+            trackCounts[String(describing: entry.track.id), default: 0] += 1
+        }
+        let artistFirst = settings.customArtistFirst
+        // Colonne degli indicatori: una per tipo, riservata (a larghezza fissa) solo se almeno una riga ne ha bisogno, così le righe
+        // restano allineate anche passando a due cifre.
+        let slotArtist = artistCounts.values.contains { $0 >= 2 }
+        let slotAlbum = albumCounts.values.contains { $0 >= 2 }
+        let slotTrack = trackCounts.values.contains { $0 >= 2 }
+        // Build 45: la lista non ha NESSUNA selezione nativa (la fascia nativa è blu di sistema, non colorabile, e restava sotto la nostra).
+        // La selezione la teniamo noi (`customPlaylistSelection`) e la disegniamo col colore scelto in Impostazioni, come nelle altre schede.
+        // Click: seleziona; ⌘-click: aggiunge/toglie; ⇧-click: intervallo. Il riordino (`.onMove`) non ne ha bisogno.
+        let order = shown.map(\.id)
+        return List {
             GlassInsetRow(edge: .top)
             // Riga radice dell'albero: sempre presente (anche a elenco vuoto), con il nome
             // modificabile al posto del vecchio campo "Name". Non è selezionabile (nessun tag).
@@ -1845,7 +2328,14 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                         .padding(.leading, 22)
                 }
                 ForEach(shown) { entry in
-                    trackRow(entry.track, selectionOnLeft: false) {
+                    let artistKey = entry.track.artist.trimmingCharacters(in: .whitespaces).lowercased()
+                    let albumKey = entry.track.album.trimmingCharacters(in: .whitespaces).lowercased()
+                    let repeats = CustomRepeats(
+                        artist: artistKey.isEmpty ? 0 : (artistCounts[artistKey] ?? 0),
+                        album: (artistKey.isEmpty || albumKey.isEmpty) ? 0 : (albumCounts[artistKey + "\u{1}" + albumKey] ?? 0),
+                        sameTrack: trackCounts[String(describing: entry.track.id)] ?? 0,
+                        slotArtist: slotArtist, slotAlbum: slotAlbum, slotTrack: slotTrack)
+                    trackRow(entry.track, selectionOnLeft: false, artistFirst: artistFirst, repeats: repeats) {
                         Button {
                             config.onRemove(entry.id)
                         } label: {
@@ -1857,21 +2347,43 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                     }
                     .padding(.leading, 22)
                     .tag(entry.id)
+                    .contentShape(Rectangle())   // build 45: senza selezione nativa, il click deve funzionare su tutta la riga
                     // Doppio click avvia il brano, con la Custom Playlist stessa (nell'ordine
                     // attuale) come coda e come sorgente per i controlli del mini player.
                     .simultaneousGesture(TapGesture(count: 2).onEnded { if !entry.track.isDeviceOnly { onPlay?(entry.track, queue, source) } })
+                    .simultaneousGesture(TapGesture().onEnded { selectCustomRow(entry.id, order: order) })
                     .listRowBackground(customPlaylistSelection.contains(entry.id) ? rowHighlight(settings.highlightColor) : nil)
                 }
                 // Il riordino è disattivato mentre si filtra con la ricerca (indici non corrispondenti).
                 .onMove(perform: customQuery.isEmpty ? { source, destination in
-                    config.onMove(source, destination)
+                    // Se la riga trascinata è tra quelle selezionate, si spostano tutte insieme (la lista non conosce la nostra selezione).
+                    var moving = source
+                    if source.count == 1, let first = source.first, config.entries.indices.contains(first),
+                       customPlaylistSelection.count > 1, customPlaylistSelection.contains(config.entries[first].id) {
+                        moving = IndexSet(config.entries.indices.filter { customPlaylistSelection.contains(config.entries[$0].id) })
+                    }
+                    config.onMove(moving, destination)
                 } : nil)
             }
             GlassInsetRow(edge: .bottom)
         }
         .listStyle(.inset)
-        .background(HideNativeSelection())   // la selezione si vede solo col colore scelto, non col blu di sistema
         .scrollContentBackground(.hidden)
+    }
+
+    /// Selezione della Custom (build 45): click, ⌘-click (aggiunge/toglie), ⇧-click (intervallo dall'ultima riga cliccata).
+    private func selectCustomRow(_ id: UUID, order: [UUID]) {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.command) {
+            if customPlaylistSelection.contains(id) { customPlaylistSelection.remove(id) } else { customPlaylistSelection.insert(id) }
+            customSelectionAnchor = id
+        } else if flags.contains(.shift), let anchor = customSelectionAnchor,
+                  let i = order.firstIndex(of: anchor), let j = order.firstIndex(of: id) {
+            customPlaylistSelection = Set(order[min(i, j)...max(i, j)])
+        } else {
+            customPlaylistSelection = [id]
+            customSelectionAnchor = id
+        }
     }
 
     /// Artista del brano se diverso da quello dell'album (artista dell'album, o del brano se manca); altrimenti nil.
@@ -1883,6 +2395,49 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         return artist.compare(reference, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame ? nil : artist
     }
 
+    /// Ricorrenze di una riga nella Custom Playlist (0 = senza dato). Un solo conteggio ≥ 2 per tipo.
+    struct CustomRepeats {
+        var artist = 0, album = 0, sameTrack = 0
+        var slotArtist = false, slotAlbum = false, slotTrack = false
+        var hasAny: Bool { slotArtist || slotAlbum || slotTrack }
+    }
+
+    /// Indicatori discreti «×N» sulla riga: brano identico inserito più volte (arancione, il caso da correggere), stesso album,
+    /// stesso artista. Sempre attivi nella Custom Playlist.
+    @ViewBuilder
+    private func repeatBadges(_ r: CustomRepeats) -> some View {
+        HStack(spacing: 4) {
+            if r.slotTrack {
+                if r.sameTrack >= 2 { badge("doc.on.doc.fill", r.sameTrack, color: .orange, help: t("custom_dup_track_help", r.sameTrack)) }
+                else { Color.clear.frame(width: Self.badgeWidth, height: 1) }
+            }
+            if r.slotAlbum {
+                if r.album >= 2 { badge("square.stack", r.album, color: .secondary, help: t("custom_dup_album_help", r.album)) }
+                else { Color.clear.frame(width: Self.badgeWidth, height: 1) }
+            }
+            if r.slotArtist {
+                if r.artist >= 2 { badge("person.fill", r.artist, color: .secondary, help: t("custom_dup_artist_help", r.artist)) }
+                else { Color.clear.frame(width: Self.badgeWidth, height: 1) }
+            }
+        }
+    }
+
+    /// Larghezza fissa di ogni indicatore (icona + «×» + fino a due cifre): non cambia passando da 9 a 10.
+    private static var badgeWidth: CGFloat { 46 }
+
+    private func badge(_ icon: String, _ count: Int, color: Color, help: String) -> some View {
+        HStack(spacing: 2) {
+            Image(systemName: icon)
+            Text("×\(count)").monospacedDigit()
+        }
+        .font(.caption.monospacedDigit())   // come la durata del brano
+        .foregroundStyle(color)
+        .lineLimit(1).minimumScaleFactor(0.8)
+        .frame(width: Self.badgeWidth, height: 16)
+        .background(color.opacity(0.15), in: Capsule())
+        .help(help)
+    }
+
     private func trackRow(_ track: Track) -> some View {
         trackRow(track, number: nil) { EmptyView() }
     }
@@ -1891,13 +2446,10 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// nello stesso HStack — cosi c'è un solo Spacer a spingere tutto a destra, invece di
     /// annidarne un secondo attorno a questa vista.
     @ViewBuilder
-    private func trackRow<Trailing: View>(_ track: Track, number: String? = nil, insideAlbum: Bool = false, selectionOnLeft: Bool = true, @ViewBuilder trailing: () -> Trailing) -> some View {
+    private func trackRow<Trailing: View>(_ track: Track, number: String? = nil, insideAlbum: Bool = false, selectionOnLeft: Bool = true,
+                                          artistFirst: Bool = false, repeats: CustomRepeats? = nil,
+                                          @ViewBuilder trailing: () -> Trailing) -> some View {
         HStack(spacing: 10) {
-            // Selezione (a sinistra, come le caselle di un elenco): colonna di larghezza fissa, invisibile se non selezionato.
-            if selectionOnLeft {
-                trailing()
-                    .frame(width: 24, alignment: .center)
-            }
             if let number {
                 // Dentro un album: il numero di traccia al posto della copertina.
                 Text(number)
@@ -1910,10 +2462,11 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 ArtworkThumbnail(track: track, provider: artworkProvider, version: artworkRevision, size: 32)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(track.title).font(.system(size: settings.listTextSize.points)).lineLimit(1)
+                // «Artista in evidenza» (solo Custom Playlist): artista in grande, titolo e album sulla riga piccola.
+                Text(artistFirst ? track.artist : track.title).font(.system(size: settings.listTextSize.points)).lineLimit(1)
                 if !insideAlbum {
                     HStack(spacing: 6) {
-                        Text("\(track.artist) — \(track.album)")
+                        Text(artistFirst ? "\(track.title) — \(track.album)" : "\(track.artist) — \(track.album)")
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 } else if let differing = artistDifferingFromAlbum(track) {
@@ -1923,6 +2476,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 }
             }
             Spacer()
+            if let repeats, repeats.hasAny { repeatBadges(repeats) }
             if let warning = track.warning {
                 // Brano non trasferibile (es. solo nel cloud): niente icone né selezione, solo l'avviso
                 // in evidenza a destra.
@@ -1967,8 +2521,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                                 .foregroundStyle(statusIconGreen)
                                 .help(t("tooltip_device_only_track"))
                         } else if onDevice(track) {
-                            Image(systemName: "arrow.right.circle")
-                                .foregroundStyle(statusIconGreen)
+                            Image(systemName: "arrow.right.circle.fill")
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(.white, statusIconGreen)
                                 .help(t("artwork_on_device"))
                         } else {
                             Color.clear
@@ -2012,8 +2567,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                                 .foregroundStyle(statusIconGreen)
                                 .help(t("tooltip_device_only_track"))
                         } else if onDevice(track) {
-                            Image(systemName: "arrow.right.circle")
-                                .foregroundStyle(statusIconGreen)
+                            Image(systemName: "arrow.right.circle.fill")
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(.white, statusIconGreen)
                                 .help(t("artwork_on_device"))
                         } else {
                             Color.clear
@@ -2032,7 +2588,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         // il titolo non si sposta rispetto agli altri brani.
         .overlay(alignment: .leading) {
             if let playingTrackID, playingTrackID == track.id {
-                playingIndicator.offset(x: -15)
+                playingIndicator.offset(x: -19)
             }
         }
     }
@@ -2156,7 +2712,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             while i < n { hasher.combine(tracks[i].id); i += step }
             hasher.combine(tracks[n - 1].id)
         }
-        return "\(hasher.finalize())|\(genreKey ?? "")|\(query)"
+        return "\(hasher.finalize())|\(genreKey ?? "")|\(query)|\(settings.albumOrder.rawValue)"
     }
 
     /// Brani filtrati e in ordine alfabetico per titolo (scheda Brani), in memoria finché non cambia la chiave.
@@ -2177,7 +2733,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         let key = derivedKey
         if derived.albumsKey == key { return derived.albums }
         let perfStart = Date()
-        let groups = scopedTracks.groupedByAlbum()
+        let groups = scopedTracks.groupedByAlbum(byDateAdded: settings.albumOrder == .dateAdded)
         AppLog.debug("[prestazioni] Elenco Album ricalcolato: \(tracks.count) brani → \(groups.count) album, \(String(format: "%.2f", Date().timeIntervalSince(perfStart))) s")
         let value = query.isEmpty ? groups : groups.filter { $0.title.localizedCaseInsensitiveContains(query) }
         derived.albumsKey = key
@@ -2203,7 +2759,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         return source.compactMap { g in
             if g.title.localizedCaseInsensitiveContains(query) { return g }
             let found = g.tracks.filter(matches)
-            return found.isEmpty ? nil : TrackGroup(id: g.id, title: g.title, subtitle: playlistSubtitle(found), tracks: found)
+            return found.isEmpty ? nil : TrackGroup(id: g.id, title: g.title, subtitle: playlistSubtitle(found), tracks: found, folderPath: g.folderPath, isSmart: g.isSmart)
         }
     }
 }
@@ -2356,6 +2912,17 @@ struct ArtworkOriginIcon<Track: CatalogTrack>: View {
 /// - brano scelto: `checkmark.rectangle`;
 /// - gruppo (Playlist / Album / Artista) scelto in parte: `rectangle.on.rectangle.dashed`;
 /// - gruppo scelto per intero: `rectangle.on.rectangle`.
+/// Segno di selezione unico per tutte le schede: cerchio verde con spunta (selezionato) o trattino (selezione parziale).
+private struct SelectionMark: View {
+    let partial: Bool
+    var body: some View {
+        Image(systemName: partial ? "minus.circle.fill" : "checkmark.circle.fill")
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(.white, statusIconGreen)
+            .font(.system(size: 18))
+    }
+}
+
 private struct SelectToggleIcon: View {
     enum State { case none, partial, all }
     let state: State
@@ -2363,21 +2930,24 @@ private struct SelectToggleIcon: View {
     /// Intestazione di un gruppo (Playlist / Album / Artista) invece di un brano: cambia l'icona.
     var isGroup = false
     let action: () -> Void
+    /// Larghezza della colonna di selezione (2.3 Beta 2: ridotta da 24 a 20 pt, il tondino misura 18).
+    static let columnWidth: CGFloat = 20
 
     var body: some View {
         Button(action: action) {
+            // Stesso segno in tutte le schede: cerchio verde con spunta (tutto) o trattino (parziale), come sulle copertine delle playlist.
             switch state {
             case .none:
-                Image(systemName: "square").foregroundStyle(.secondary)
+                Image(systemName: "circle").foregroundStyle(.secondary)
             case .partial:
-                Image(systemName: "rectangle.on.rectangle.dashed").foregroundStyle(Color.primary.opacity(0.85))
+                SelectionMark(partial: true)
             case .all:
-                Image(systemName: isGroup ? "rectangle.on.rectangle" : "checkmark.rectangle").foregroundStyle(Color.primary.opacity(0.85))
+                SelectionMark(partial: false)
             }
         }
         .buttonStyle(.plain)
-        .font(.system(size: 15))   // 1 pt più delle altre icone di stato (14 pt)
-        .frame(width: 24, alignment: .center)   // larghezza uguale per tutti i simboli: le colonne restano allineate
+        .font(.system(size: 18))
+        .frame(width: Self.columnWidth, alignment: .center)   // larghezza uguale per tutti i simboli: le colonne restano allineate
         // Il riquadro vuoto (nulla selezionato) non si disegna: la selezione si fa cliccando la riga, il riquadro è solo
         // un'indicazione di stato (verde se scelto o parziale). Lo spazio resta, così le colonne non si spostano; senza
         // riquadro il click passa alla riga.
@@ -2550,6 +3120,132 @@ final class ListScrollHandle {
         return .moved
     }
 
+    /// Righe visibili la cui vista non è dove la tabella dice che dovrebbe essere (o non esiste): sullo schermo la lista
+    /// risulta vuota o sovrapposta anche se «le righe ci sono». Succede dopo un'apertura/chiusura quando le altezze cambiano.
+    fileprivate static func misplacedRows(in table: NSTableView) -> Int {
+        let visible = table.rows(in: table.visibleRect)
+        guard visible.length > 0 else { return 0 }
+        var bad = 0
+        for r in visible.location..<(visible.location + visible.length) {
+            let want = table.rect(ofRow: r)
+            if let rv = table.rowView(atRow: r, makeIfNecessary: false) {
+                if abs(rv.frame.minY - want.minY) > 1 || abs(rv.frame.height - want.height) > 1 { bad += 1 }
+            } else { bad += 1 }
+        }
+        return bad
+    }
+
+    /// Rimette le viste delle righe al loro posto, come farebbe uno scorrimento col trackpad.
+    fileprivate static func realign(_ scrollView: NSScrollView, _ table: NSTableView) {
+        let c = scrollView.contentView
+        let y = c.bounds.origin.y
+        table.tile()
+        c.scroll(to: NSPoint(x: c.bounds.origin.x, y: y + 1))
+        scrollView.reflectScrolledClipView(c)
+        c.scroll(to: NSPoint(x: c.bounds.origin.x, y: y))
+        scrollView.reflectScrolledClipView(c)
+        table.layoutSubtreeIfNeeded()
+        table.setNeedsDisplay(table.visibleRect)
+        table.displayIfNeeded()
+    }
+
+    /// Diagnostica (registro dettagliato): dopo un clic registra posizione, riga in cima e altezza della lista a intervalli.
+    static func traceAfterClick(_ what: String) {
+        guard let type = NSApp.currentEvent?.type,
+              [.leftMouseDown, .leftMouseUp, .keyDown, .keyUp].contains(type) else { return }
+        guard let window = NSApp.currentEvent?.window ?? NSApp.keyWindow ?? NSApp.mainWindow, let root = window.contentView,
+              let scrollView = scrollViews(in: root, containing: window.mouseLocationOutsideOfEventStream).first,
+              let table = scrollView.documentView as? NSTableView else { return }
+        let clip = scrollView.contentView
+        let savedY = clip.bounds.origin.y
+        let probeX = table.bounds.midX
+        func topRow(_ y: CGFloat) -> Int { table.row(at: NSPoint(x: probeX, y: min(max(y + 140, 0), table.bounds.height - 1))) }
+        let startRow = topRow(savedY)
+        let startRows = table.numberOfRows
+        let startHeight = Int(table.bounds.height)
+        AppLog.debug("[scorrimento] clic «\(what)»: y \(Int(savedY)); riga in cima \(startRow); righe \(startRows); altezza \(startHeight)")
+        for delay in [0.1, 0.3, 0.7, 1.5, 3.0, 5.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak scrollView, weak table] in
+                guard let scrollView, let table else { return }
+                let c = scrollView.contentView
+                let y = c.bounds.origin.y
+                let row = table.row(at: NSPoint(x: probeX, y: min(max(y + 140, 0), table.bounds.height - 1)))
+                let visible = table.rows(in: table.visibleRect)
+                var drawn = 0
+                for r in visible.location..<(visible.location + visible.length) where table.rowView(atRow: r, makeIfNecessary: false) != nil { drawn += 1 }
+                let misplaced = misplacedRows(in: table)
+                AppLog.debug("[scorrimento] … +\(delay) s: y \(Int(y)) (da \(Int(savedY))); riga in cima \(row) (da \(startRow)); righe \(table.numberOfRows); altezza \(Int(table.bounds.height)) (da \(startHeight)); righe visibili \(visible.length), disegnate \(drawn), fuori posto \(misplaced)")
+                if misplaced > 0 {
+                    realign(scrollView, table)
+                    AppLog.debug("[scorrimento] righe fuori posto (\(misplaced)): riallineate, ora \(misplacedRows(in: table))")
+                }
+                // Lista visibile ma vuota (righe non create): uno scorrimento più ampio, avanti e indietro, le fa ricreare.
+                if visible.length > 0, drawn == 0 {
+                    c.setBoundsOrigin(NSPoint(x: c.bounds.origin.x, y: y + 80))
+                    scrollView.reflectScrolledClipView(c)
+                    c.setBoundsOrigin(NSPoint(x: c.bounds.origin.x, y: y))
+                    scrollView.reflectScrolledClipView(c)
+                    AppLog.debug("[scorrimento] lista vuota: forzato un ridisegno delle righe")
+                }
+            }
+        }
+    }
+
+    /// Aprendo/chiudendo un gruppo la tabella può riposizionarsi (es. fino all'ultimo elemento aperto): si legge la posizione
+    /// della lista sotto il puntatore e la si ripristina subito dopo il ridisegno, per qualche istante (anche quando arrivano le copertine).
+    static func keepPositionAfterToggle() {
+        traceAfterClick("apertura/chiusura")
+        // Solo se l'apertura/chiusura viene da un clic o da un tasto (non da un ridisegno della tabella durante lo scorrimento).
+        guard let type = NSApp.currentEvent?.type,
+              [.leftMouseDown, .leftMouseUp, .keyDown, .keyUp].contains(type) else { return }
+        guard let window = NSApp.currentEvent?.window ?? NSApp.keyWindow ?? NSApp.mainWindow, let root = window.contentView,
+              let scrollView = scrollViews(in: root, containing: window.mouseLocationOutsideOfEventStream).first else { return }
+        let clip = scrollView.contentView
+        let savedY = clip.bounds.origin.y
+        // Si tiene ferma la RIGA che si vedeva in cima (non un'altezza assoluta): se le righe sopra cambiano altezza durante il
+        // ridisegno, la lista scivolerebbe di qualche riga. Ci si ferma appena l'utente scorre.
+        let (anchorRow, anchorOffset): (Int, CGFloat) = {
+            guard let table = scrollView.documentView as? NSTableView else { return (-1, 0) }
+            let row = table.row(at: NSPoint(x: table.bounds.midX, y: min(max(savedY + 140, 0), table.bounds.height - 1)))
+            return row >= 0 ? (row, savedY - table.rect(ofRow: row).minY) : (-1, 0)
+        }()
+        final class Flag { var userScrolled = false }
+        let flag = Flag()
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { event in flag.userScrolled = true; return event }
+        // Le altezze dei blocchi di brani (alti, soprattutto negli Artisti) si misurano a poco a poco anche dopo più secondi:
+        // finché la lista non viene scorsa dall'utente si continua a tenere ferma la riga ancorata, fino a 7 secondi.
+        let delays: [Double] = [0.0, 0.03, 0.08, 0.15, 0.25, 0.4, 0.6, 0.9, 1.3] + Array(stride(from: 1.55, through: 7.0, by: 0.25))
+        let nudgeDelays: Set<Double> = [0.08, 0.25, 0.6, 1.3]
+        for delay in delays {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak scrollView] in
+                if delay == delays.last, let monitor { NSEvent.removeMonitor(monitor) }
+                guard let scrollView, !flag.userScrolled else { return }
+                let c = scrollView.contentView
+                var target = savedY
+                if let table = scrollView.documentView as? NSTableView {
+                    if anchorRow >= 0, anchorRow < table.numberOfRows { target = table.rect(ofRow: anchorRow).minY + anchorOffset }
+                    // Mai oltre la fine del contenuto (mentre le altezze si ricalcolano sarebbe un'oscillazione continua).
+                    let maxY = max(-scrollView.contentInsets.top, table.bounds.height - c.bounds.height + scrollView.contentInsets.bottom)
+                    target = min(target, maxY)
+                }
+                if abs(c.bounds.origin.y - target) > 1 {
+                    c.scroll(to: NSPoint(x: c.bounds.origin.x, y: target))
+                    scrollView.reflectScrolledClipView(c)
+                }
+                if let table = scrollView.documentView as? NSTableView, misplacedRows(in: table) > 0 { realign(scrollView, table) }
+                // Micro-scorrimento (mezzo punto avanti e indietro): la tabella rimette a posto le righe di cui ha cambiato
+                // altezza solo quando riceve uno scorrimento; altrimenti, a lista ferma, restano sovrapposte o vuote.
+                if nudgeDelays.contains(delay) {
+                    let y0 = c.bounds.origin.y
+                    c.setBoundsOrigin(NSPoint(x: c.bounds.origin.x, y: y0 + 0.5))
+                    scrollView.reflectScrolledClipView(c)
+                    c.setBoundsOrigin(NSPoint(x: c.bounds.origin.x, y: y0))
+                    scrollView.reflectScrolledClipView(c)
+                }
+            }
+        }
+    }
+
     /// Gli scroll view con tabella visibili che contengono il punto (coordinate della finestra), dal più piccolo.
     fileprivate static func scrollViews(in root: NSView, containing point: NSPoint) -> [NSScrollView] {
         var found: [(NSScrollView, CGFloat)] = []
@@ -2599,9 +3295,22 @@ private func rowHighlight(_ color: Color) -> some View {
 
 private struct HideNativeSelection: NSViewRepresentable {
     final class Coordinator { var done = false }
+    /// Se vero, la selezione nativa si toglie a ogni aggiornamento (non solo la prima volta): per le liste la cui tabella può essere ricreata.
+    var reapplyOnUpdate = false
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView { NSView() }
     func updateNSView(_ nsView: NSView, context: Context) {
+        if reapplyOnUpdate, context.coordinator.done {
+            var ancestor: NSView? = nsView.superview
+            while let a = ancestor {
+                if let table = Self.firstTable(in: a) {
+                    if table.selectionHighlightStyle != .none { table.selectionHighlightStyle = .none }
+                    return
+                }
+                ancestor = a.superview
+            }
+            return
+        }
         guard !context.coordinator.done else { return }
         let state = context.coordinator
         // Su un Mac più lento la tabella AppKit può non esistere ancora al primo passaggio: si riprova qualche volta,
@@ -2665,7 +3374,7 @@ final class ScrollLetterTracker {
     private var observer: NSObjectProtocol?
     private var hideTask: Task<Void, Never>?
     private var lastY: CGFloat = .nan
-
+    private var lastContentHeight: CGFloat = .nan
     func attachSoon() {
         Task { @MainActor [weak self] in self?.attach() }
     }
@@ -2673,7 +3382,8 @@ final class ScrollLetterTracker {
     private func attach() {
         guard let view, let root = view.window?.contentView else { return }
         let center = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
-        let candidates = ListScrollHandle.scrollViews(in: root, containing: center)
+        // Build 38: solo le liste visibili (le altre schede restano in vita, nascoste, e potevano essere scelte per errore).
+        let candidates = ListScrollHandle.scrollViews(in: root, containing: center).filter { !$0.isHiddenOrHasHiddenAncestor }
         let match = candidates.first { rowCounts.contains(($0.documentView as? NSTableView)?.numberOfRows ?? -1) }
         guard let scrollView = match ?? candidates.first else { return }
         let clip = scrollView.contentView
@@ -2708,7 +3418,18 @@ final class ScrollLetterTracker {
               let table = scrollView.documentView as? NSTableView,
               !scrollView.isHiddenOrHasHiddenAncestor, table.numberOfRows > 1 else { return }
         let y = clip.bounds.origin.y
-        defer { lastY = y }
+        defer { lastY = y; lastContentHeight = table.bounds.height }
+        // Diagnostica (registro dettagliato): salti di posizione grandi e cambi dell'altezza del contenuto durante lo scorrimento.
+        if !lastY.isNaN, abs(y - lastY) > 0.5 {
+            let eventType = NSApp.currentEvent.map { String($0.type.rawValue) } ?? "nessuno"
+            if abs(y - lastY) > 150 {
+                AppLog.debug("[scorrimento] salto di \(Int(y - lastY)) pt (y \(Int(lastY)) → \(Int(y))); evento \(eventType); righe \(table.numberOfRows); altezza contenuto \(Int(table.bounds.height)) (prima \(Int(lastContentHeight.isNaN ? 0 : lastContentHeight))); riga 1: \(Int(table.rect(ofRow: min(1, table.numberOfRows - 1)).height)) pt")
+            } else if !lastContentHeight.isNaN, abs(table.bounds.height - lastContentHeight) > 20 {
+                let vis = table.rows(in: table.visibleRect)
+                let hs = (vis.location..<(vis.location + min(vis.length, 14))).map { Int(table.rect(ofRow: $0).height) }
+                AppLog.debug("[scorrimento] altezza del contenuto \(Int(lastContentHeight)) → \(Int(table.bounds.height)) pt durante lo scorrimento (y \(Int(y)); righe \(table.numberOfRows)); righe visibili da \(vis.location): \(hs)")
+            }
+        }
         guard !lastY.isNaN, abs(y - lastY) > 0.5 else { return }
         // Voce in cima sotto i pannelli: la riga di margine in alto (la prima) ha l'altezza dei pannelli sovrapposti.
         let inset = table.rect(ofRow: 0).height
@@ -2770,10 +3491,11 @@ private struct ScrollLetterBubble: View {
             let y = min(max(model.centerY, 22), max(22, geo.size.height - 22))
             // Le ultime 24 lettere al massimo; `fixedSize` evita che la capsula si allarghi a tutta la lista (altezza e larghezza
             // sono quelle del testo, minimo 44 pt) e che `offset` la sposti in basso.
+            let isLabel = !showTyped && model.letter.count > 1   // periodo («Questo mese», «2024»): testo più piccolo
             Text(showTyped ? String(typed.suffix(24)) : model.letter)
-                .font(.system(size: showTyped ? 20 : 26, weight: .bold, design: .rounded))
+                .font(.system(size: showTyped ? 20 : (isLabel ? 17 : 26), weight: .bold, design: .rounded))
                 .lineLimit(1)
-                .padding(.horizontal, showTyped ? 14 : 0)
+                .padding(.horizontal, (showTyped || isLabel) ? 14 : 0)
                 .frame(minWidth: 44, minHeight: 44)
                 .fixedSize(horizontal: true, vertical: true)
                 .background(showTyped ? AnyShapeStyle(Material.thick) : AnyShapeStyle(Material.ultraThin.opacity(0.7)),

@@ -80,6 +80,9 @@ struct LocalTrack: Identifiable, Hashable, Sendable, Codable {
     /// per ordinare a parità di punteggio (prima i meno ascoltati).
     var playCountStored: Int?
     var playCount: Int { playCountStored ?? 0 }
+    /// Data di aggiunta alla libreria (secondi dal 1970; nil = dato non disponibile: copie salvate prima). Per le unità esterne è la data di modifica del file.
+    var dateAddedStored: Double?
+    var dateAdded: Double { dateAddedStored ?? 0 }
     /// Non-nil per un brano presente solo sul dispositivo (importato da una playlist del device): percorso relativo alla
     /// cartella Music (Artista/Album/file). Non ha file locale (`url` nil) e non va copiato: si inserisce solo nella playlist.
     var devicePath: String?
@@ -91,7 +94,8 @@ struct LocalTrack: Identifiable, Hashable, Sendable, Codable {
          isDRMProtected: Bool, isCloud: Bool, duration: TimeInterval, trackNumber: Int,
          albumArtist: String = "", isCompilation: Bool = false,
          discNumber: Int = 0, discCount: Int = 0, isPurchased: Bool = false, isLossless: Bool = false,
-         genre: String = "", year: Int = 0, bpm: Int = 0, playCount: Int = -1) {
+         genre: String = "", year: Int = 0, bpm: Int = 0, playCount: Int = -1, dateAdded: Double = 0) {
+        self.dateAddedStored = dateAdded > 0 ? dateAdded : nil
         self.genreStored = genre.isEmpty ? nil : genre
         self.yearStored = year > 0 ? year : nil
         self.bpmStored = bpm > 0 ? bpm : nil
@@ -147,11 +151,21 @@ struct PlaylistInfo: Sendable, Codable {
     let trackIDs: [String]
     /// Opzionale: le copie salvate prima che esistesse non lo hanno (valgono come playlist normali).
     var kind: PlaylistKind? = nil
+    /// Cartella di Musica che contiene la playlist (nil = livello principale). Solo libreria locale (2.3 Beta 2).
+    var parentID: String? = nil
+}
+
+/// Cartella di playlist di Musica (solo libreria locale).
+struct PlaylistFolderInfo: Sendable, Codable {
+    let id: String
+    let name: String
+    var parentID: String? = nil
 }
 
 struct LibraryCatalog: Sendable {
     let tracks: [LocalTrack]
     let playlists: [PlaylistInfo]
+    var folders: [PlaylistFolderInfo] = []
 }
 
 /// Legge la libreria dell'app Musica tramite il framework iTunesLibrary.
@@ -221,13 +235,18 @@ final class MusicLibraryService: @unchecked Sendable {
                     id: pl.persistentID.stringValue,
                     name: pl.name,
                     trackIDs: pl.items.filter { $0.mediaKind == .kindSong }.map { $0.persistentID.stringValue },
-                    kind: pl.kind == .smart ? .smart : ((pl.kind == .genius || pl.kind == .geniusMix) ? .genius : .regular)
+                    kind: pl.kind == .smart ? .smart : ((pl.kind == .genius || pl.kind == .geniusMix) ? .genius : .regular),
+                    parentID: pl.parentID?.stringValue
                 )
             }
             .filter { !$0.trackIDs.isEmpty }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        // Cartelle di playlist (l'ordine e le cartelle vuote si trattano in `AppViewModel.orderedPlaylistGroups`).
+        let folders: [PlaylistFolderInfo] = library.allPlaylists
+            .filter { $0.kind == .folder && $0.distinguishedKind.rawValue == 0 }
+            .map { PlaylistFolderInfo(id: $0.persistentID.stringValue, name: $0.name, parentID: $0.parentID?.stringValue) }
 
-        return LibraryCatalog(tracks: tracks, playlists: playlists)
+        return LibraryCatalog(tracks: tracks, playlists: playlists, folders: folders)
     }
 
     /// Rilegge una playlist direttamente da iTunesLibrary al momento dell'invio, invece di usare
@@ -352,7 +371,8 @@ final class MusicLibraryService: @unchecked Sendable {
             genre: item.genre,
             year: item.year,
             bpm: item.beatsPerMinute,
-            playCount: item.playCount
+            playCount: item.playCount,
+            dateAdded: (item.addedDate as Date?)?.timeIntervalSince1970 ?? 0
         )
     }
 
@@ -478,7 +498,7 @@ struct ExternalParsed: Sendable, Codable {
         // Hash stabile del percorso (hashValue cambia a ogni avvio).
         var h: UInt64 = 5381
         for b in xml.path.utf8 { h = (h &* 33) &+ UInt64(b) }
-        return AppFolders.externalLibrary.appendingPathComponent("external-library-v4-\(String(h, radix: 16)).json")
+        return AppFolders.externalLibrary.appendingPathComponent("external-library-v5-\(String(h, radix: 16)).json")
     }
 
     /// Cancella la copia compatta di una libreria esterna (quando la si toglie dalle Impostazioni).
@@ -604,7 +624,8 @@ struct ExternalParsed: Sendable, Codable {
                 genre: (d["Genre"] as? String) ?? "",
                 year: (d["Year"] as? Int) ?? 0,
                 bpm: (d["BPM"] as? Int) ?? 0,
-                playCount: (d["Play Count"] as? Int) ?? 0)
+                playCount: (d["Play Count"] as? Int) ?? 0,
+                dateAdded: (d["Date Added"] as? Date)?.timeIntervalSince1970 ?? 0)
             entries.append(Entry(track: track, path: path))
         }
 
@@ -1122,7 +1143,7 @@ enum DriveLibraryService {
                        isDRMProtected: it.protected, isCloud: false, duration: it.duration,
                        trackNumber: it.trackNumber, albumArtist: it.albumArtist, isCompilation: false,
                        discNumber: it.discNumber, discCount: 0, isPurchased: false, isLossless: it.lossless,
-                       genre: it.genre, year: it.year)
+                       genre: it.genre, year: it.year, dateAdded: it.modified)
         }
         let playlists = (importPlaylists ? index.playlists : []).map {
             PlaylistInfo(id: prefix + "pl:" + $0.name, name: $0.name, trackIDs: $0.rels.map { prefix + $0 }, kind: .regular)

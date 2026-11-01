@@ -55,6 +55,8 @@ protocol CatalogTrack: Identifiable, Hashable {
     var discNumber: Int { get }
     /// Numero di dischi dell'album secondo la sorgente (0 se sconosciuto).
     var discCount: Int { get }
+    /// Data di aggiunta alla libreria in secondi dal 1970 (0 se sconosciuta): ordina la scheda Album per «Data di aggiunta».
+    var dateAdded: Double { get }
     /// true se il brano è stato acquistato su iTunes Store (possibile DRM: riproduzione sul Garmin non garantita).
     var isPurchased: Bool { get }
     /// true se il brano è presente solo sul dispositivo (importato da una playlist del device nella Custom Playlist).
@@ -75,6 +77,7 @@ extension CatalogTrack {
     var trackNumber: Int { 0 }
     var discNumber: Int { 0 }
     var discCount: Int { 0 }
+    var dateAdded: Double { 0 }
 }
 
 /// Ordine dei brani dentro un album: disco, numero di traccia (i senza numero in fondo), poi titolo.
@@ -95,6 +98,16 @@ struct TrackGroup<Track: CatalogTrack>: Identifiable {
     let tracks: [Track]
     /// Sottogruppi (scheda Artisti: gli album dell'artista, con i loro brani). Vuoto negli altri gruppi.
     var subgroups: [TrackGroup<Track>] = []
+    /// Cartelle di Musica che contengono la playlist, dalla più esterna (vuoto = livello principale). Solo scheda Playlist locale.
+    var folderPath: [FolderRef] = []
+    /// Playlist smart o Genius (regole automatiche): nella scheda Playlist mostra l'icona a ingranaggio invece del mosaico.
+    var isSmart = false
+}
+
+/// Riferimento a una cartella di playlist (id e nome).
+struct FolderRef: Hashable {
+    let id: String
+    let name: String
 }
 
 /// Formatta una durata in secondi come "m:ss" o "h:mm:ss". Stringa vuota se <= 0.
@@ -174,7 +187,7 @@ extension Array where Element: CatalogTrack {
 
     /// Scheda Album: un gruppo per album **e artista dell'album** (due album con lo stesso nome ma di artisti
     /// diversi restano separati); le compilation si raggruppano per solo nome. Brani in ordine di disco e traccia.
-    func groupedByAlbum() -> [TrackGroup<Element>] {
+    func groupedByAlbum(byDateAdded: Bool = false) -> [TrackGroup<Element>] {
         func albumName(_ track: Element) -> String { track.album.isEmpty ? t("unknown_album") : track.album }
         func albumArtist(_ track: Element) -> String {
             let a = track.albumArtist.trimmingCharacters(in: .whitespaces)
@@ -190,6 +203,13 @@ extension Array where Element: CatalogTrack {
                               tracks: tracks.sorted(by: inAlbumOrder))
         }
         .sorted {
+            // «Data di aggiunta»: prima gli album con l'aggiunta più recente (data del loro brano aggiunto per ultimo), come in Apple
+            // Music; a parità, o senza data (in fondo), vale l'ordine alfabetico.
+            if byDateAdded {
+                let a = $0.tracks.reduce(0.0) { Swift.max($0, $1.dateAdded) }
+                let b = $1.tracks.reduce(0.0) { Swift.max($0, $1.dateAdded) }
+                if a != b { return a > b }
+            }
             let r = $0.title.localizedCaseInsensitiveCompare($1.title)
             return r == .orderedSame ? $0.subtitle.localizedCaseInsensitiveCompare($1.subtitle) == .orderedAscending
                                      : r == .orderedAscending

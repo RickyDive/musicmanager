@@ -78,7 +78,7 @@ final class FixArtworkSession: ObservableObject, Identifiable {
 
     /// Esito per brano (id) man mano che li si guarda: copertina scelta (adesso o in passato), trovata online ma non scelta,
     /// non trovata. I brani senza esito non sono ancora stati controllati. Serve all'avviso del pulsante «OK».
-    private enum Outcome { case chosen, foundNotChosen, notFound }
+    private enum Outcome { case chosen, foundNotChosen, notFound, ignored }
     private var outcomes: [String: Outcome] = [:]
     /// Brani con una copertina online trovata ma non scelta.
     var notChosenCount: Int { outcomes.values.filter { $0 == .foundNotChosen }.count }
@@ -140,13 +140,35 @@ final class FixArtworkSession: ObservableObject, Identifiable {
         loadCurrent()
     }
 
-    /// Passa al brano successivo (se c'è): sull'ultimo si resta lì e si chiude con «OK» o «Close».
-    private func advance() {
-        if canGoNext { next() }
+    /// Chiave dell'album di un brano. 2.3 Beta 2: per una compilation (tag «Compilation») vale il solo nome dell'album, perché ogni
+    /// brano ha un artista diverso e altrimenti ogni brano sarebbe un album a sé (18 conferme invece di una); per gli altri album
+    /// restano artista e album.
+    static func albumKey(_ track: LocalTrack) -> String {
+        track.isCompilation ? "\u{1}compilation|" + track.album.lowercased() : (track.artist + "|" + track.album).lowercased()
     }
 
-    /// «Ignore»: lascia il brano com'è (nessuna copertina scelta) e passa al successivo.
+    /// Passa al brano successivo (se c'è). 2.3 Beta 2: se non ne restano (ultimo brano, o ultimo album dopo «Sì»/«No» a tutto l'album,
+    /// «Ignora» o «Conferma»), la finestra si chiude da sola, come con «Close» (le conferme sono già salvate).
+    private func advance() {
+        if canGoNext { next() } else { finish() }
+    }
+
+    /// «Ignore» (2.3 Beta 2): lascia **tutto l'album** del brano mostrato com'è (nessuna copertina scelta) e passa al primo
+    /// brano di un altro album. I brani seguenti dello stesso album (stessa chiave artista|album, anche non contigui) si
+    /// saltano come quelli del «Sì» a tutto l'album (`albumAssigned`); segnati «ignorati» non fanno comparire l'avviso di «OK»,
+    /// perché è una scelta esplicita. Senza album, o con un solo brano, si salta solo il brano (come prima).
     func ignore() {
+        let track = currentTrack
+        if outcomes[track.id] != .chosen { outcomes[track.id] = .ignored }
+        if !track.album.isEmpty {
+            let key = Self.albumKey(track)
+            for (i, other) in tracks.enumerated() where i > index && !albumAssigned.contains(other.id)
+                && Self.albumKey(other) == key {
+                albumAssigned.insert(other.id)
+                if outcomes[other.id] != .chosen { outcomes[other.id] = .ignored }
+            }
+        }
+        // Se non resta nessun altro album da vedere, il pannello si chiude da solo (come «Close»: le conferme sono già salvate).
         advance()
     }
 
@@ -192,7 +214,7 @@ final class FixArtworkSession: ObservableObject, Identifiable {
     /// Se altri brani dello stesso album sono senza copertina confermata, prepara la domanda.
     /// Ritorna vero se la domanda è stata mostrata (il passaggio al brano successivo avviene dopo la risposta).
     private func proposeAlbum(for track: LocalTrack, data: Data) -> Bool {
-        let albumKey = (track.artist + "|" + track.album).lowercased()
+        let albumKey = Self.albumKey(track)
         guard !track.album.isEmpty, !promptedAlbums.contains(albumKey) else { return false }
         let others = siblings(track)
         guard !others.isEmpty else { return false }
@@ -406,6 +428,7 @@ struct FixArtworkView: View {
                         Button { session.ignore() } label: { Text(t("button_ignore")).frame(width: textButtonWidth) }
                             .buttonStyle(.flatRoomy)
                             .disabled(!session.canGoNext)
+                            .help(t("fix_artwork_ignore_help"))
                     }
                 }
                 .padding(.top, 22)

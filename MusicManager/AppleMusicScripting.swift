@@ -197,6 +197,74 @@ enum AppleMusicScripting {
         return added
     }
 
+    /// Richiesta di annullamento condivisa fra l'interfaccia e il lavoro in secondo piano (2.3 Beta 2).
+    final class WriteCancel: @unchecked Sendable {
+        private let lock = NSLock()
+        private var flag = false
+        func cancel() { lock.lock(); flag = true; lock.unlock() }
+        var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return flag }
+    }
+
+    /// Stima in secondi del tempo di scrittura (misurata in Beta 1): ~25 ms per un brano della libreria, ~0,75 s per un file
+    /// esterno, che Music deve importare/copiare. Serve a decidere se mostrare la barra di avanzamento.
+    static func estimatedWriteSeconds(for tracks: [LocalTrack]) -> Double {
+        tracks.reduce(0) { $0 + (UInt64($1.id) == nil ? 0.75 : 0.025) }
+    }
+
+    /// Come `addTracks`, ma a blocchi da circa 1,5 s di lavoro, eseguiti **fuori dal thread principale**: dopo ogni blocco
+    /// si riferisce l'avanzamento (brani elaborati) e si controlla l'annullamento (che ferma prima del blocco successivo:
+    /// i brani già aggiunti restano nella playlist). La playlist si crea se manca. Restituisce quanti brani sono stati aggiunti.
+    @discardableResult
+    static func addTracksInChunks(_ tracks: [LocalTrack], toPlaylistNamed name: String, cancel: WriteCancel,
+                                  progress: @escaping @Sendable (Int) -> Void) async throws -> Int {
+        guard !tracks.isEmpty else { return 0 }
+        // I copioni si preparano qui (stringhe: nessun tipo non trasferibile passa al lavoro in secondo piano).
+        var scripts: [(script: String, count: Int)] = []
+        var chunk: [LocalTrack] = []
+        var cost = 0.0
+        func flush() {
+            guard !chunk.isEmpty else { return }
+            scripts.append((chunkScript(for: chunk, playlistNamed: name), chunk.count))
+            chunk = []; cost = 0
+        }
+        for track in tracks {
+            chunk.append(track)
+            cost += UInt64(track.id) == nil ? 0.75 : 0.025
+            if cost >= 1.5 { flush() }
+        }
+        flush()
+        let total = tracks.count
+        let planned = scripts
+        let started = Date()
+        let added: Int = try await Task.detached(priority: .userInitiated) {
+            var added = 0, done = 0
+            for item in planned {
+                if cancel.isCancelled { break }
+                added += Int(try run(item.script)?.int32Value ?? 0)
+                done += item.count
+                progress(done)
+            }
+            return added
+        }.value
+        logWrite("addTracksInChunks" + (cancel.isCancelled ? " (annullato)" : ""), name, requested: total, added: added, since: started)
+        return added
+    }
+
+    private static func chunkScript(for tracks: [LocalTrack], playlistNamed name: String) -> String {
+        var script = """
+        tell application "Music"
+        \(folderLookup(create: true))
+        \(playlistLookup(name))
+            if targetPlaylist is missing value then
+                set targetPlaylist to make new user playlist at gmmFolder with properties {name:"\(escaped(name))"}
+            end if
+            set countBefore to count of tracks of targetPlaylist
+        """
+        script += addLines(for: tracks)
+        script += "\n    return (count of tracks of targetPlaylist) - countBefore\nend tell"
+        return script
+    }
+
     /// Diagnostica (2.3 Beta 1): tempo dello script di scrittura in Musica, per brano, e se gira sul thread principale
     /// (in quel caso l'interfaccia resta ferma per tutta la durata).
     private static func logWrite(_ what: String, _ name: String, requested: Int, added: Int, since start: Date) {

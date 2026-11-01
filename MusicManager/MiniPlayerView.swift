@@ -257,7 +257,7 @@ struct MiniPlayerView: View {
                     if track.isDeviceOnly {
                         Image(systemName: "watch.analog").foregroundStyle(statusIconGreen).help(t("tooltip_device_only_track"))
                     } else if isOnDevice {
-                        Image(systemName: "arrow.right.circle").foregroundStyle(statusIconGreen).help(t("artwork_on_device"))
+                        Image(systemName: "arrow.right.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, statusIconGreen).help(t("artwork_on_device"))
                     } else { Color.clear }
                 }
                 .font(.system(size: 14)).frame(width: 20)

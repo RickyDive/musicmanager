@@ -60,6 +60,14 @@ final class AppSettings: ObservableObject {
     // MARK: Librerie remote (globali: non dipendono dal dispositivo collegato)
 
     /// Quali playlist di Apple Music mostrare, per tipo. Salvato a parte (vale per ogni dispositivo).
+    /// 2.3 Beta 2: ordine degli album nella scheda Album.
+    enum AlbumOrder: String, CaseIterable, Identifiable {
+        case alphabetical, dateAdded
+        var id: String { rawValue }
+        var title: String { self == .alphabetical ? t("settings_album_order_alpha") : t("settings_album_order_date") }
+    }
+    private static let albumOrderKey = "album_order"
+
     enum PlaylistTypeFilter: String, CaseIterable, Identifiable {
         case all, regularOnly, smartOrGenius
         var id: String { rawValue }
@@ -79,6 +87,7 @@ final class AppSettings: ObservableObject {
         }
     }
     private static let playlistTypeFilterKey = "playlist_type_filter"
+    private static let customArtistFirstKey = "custom_artist_first"
 
     /// Colori fissi proposti per le righe selezionate (nome del testo, esadecimale RRGGBB).
     nonisolated static let highlightSwatches: [(nameKey: String, hex: String)] = [
@@ -95,6 +104,7 @@ final class AppSettings: ObservableObject {
     private static let checkDeviceUpdatesKey = "check_device_updates"
     private static let showDeviceFileManagerKey = "show_device_file_manager"
     private static let manageMusicOnVolumesKey = "manage_music_on_volumes"
+    private static let interfaceFollowsSelectionKey = "interface_follows_selection"
     private static let detailedLogKey = "detailed_log"
     private static let airPlayAsAudioKey = "airplay_as_audio"
     private static let confirmMusicChangesKey = "confirm_music_changes"
@@ -261,6 +271,23 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(mountRemoteLibrariesAtLaunch, forKey: Self.mountRemoteAtLaunchKey) }
     }
 
+    /// Colore dell'interfaccia (2.3 Beta 2): spento = segue il colore d'accento di Sistema; acceso = selettori, pulsanti principali
+    /// e icone attive usano il colore scelto per le righe selezionate, a piena opacità.
+    @Published var interfaceFollowsSelection: Bool {
+        didSet { UserDefaults.standard.set(interfaceFollowsSelection, forKey: Self.interfaceFollowsSelectionKey) }
+    }
+
+    /// Accento da applicare con `.tint(...)` (nil = Sistema).
+    var interfaceTint: Color? {
+        interfaceFollowsSelection ? Color(nsColor: NSColor(highlightColor).withAlphaComponent(1)) : nil
+    }
+
+    /// Colore di selezione pieno (senza trasparenza), a prescindere dall'opzione «L'interfaccia usa il colore di selezione».
+    var selectionSolidColor: Color { Color(nsColor: NSColor(highlightColor).withAlphaComponent(1)) }
+
+    /// Accento per le viste che disegnano a mano il colore (barre, pallini, righe delle Impostazioni).
+    var accentColor: Color { interfaceTint ?? Color.accentColor }
+
     @Published var confirmBeforeMusicChanges: Bool {
         didSet { UserDefaults.standard.set(confirmBeforeMusicChanges, forKey: Self.confirmMusicChangesKey) }
     }
@@ -301,6 +328,15 @@ final class AppSettings: ObservableObject {
 
     @Published var listTextSize: ListTextSize {
         didSet { UserDefaults.standard.set(listTextSize.rawValue, forKey: Self.listTextSizeKey) }
+    }
+
+    /// 2.3 Beta 2: nella Custom Playlist la riga principale mostra l'artista e la piccola titolo e album (per vedere i doppioni).
+    @Published var customArtistFirst: Bool {
+        didSet { UserDefaults.standard.set(customArtistFirst, forKey: Self.customArtistFirstKey) }
+    }
+
+    @Published var albumOrder: AlbumOrder {
+        didSet { UserDefaults.standard.set(albumOrder.rawValue, forKey: Self.albumOrderKey) }
     }
 
     @Published var playlistTypeFilter: PlaylistTypeFilter {
@@ -544,12 +580,15 @@ final class AppSettings: ObservableObject {
         autoLoadAppleArtwork = d.autoLoadAppleArtwork ?? true
         proposeSharedArtworkSearch = d.proposeSharedArtworkSearch ?? true
         playlistTypeFilter = PlaylistTypeFilter(rawValue: UserDefaults.standard.string(forKey: Self.playlistTypeFilterKey) ?? "") ?? .all
+        customArtistFirst = UserDefaults.standard.object(forKey: Self.customArtistFirstKey) as? Bool ?? false
+        albumOrder = AlbumOrder(rawValue: UserDefaults.standard.string(forKey: Self.albumOrderKey) ?? "") ?? .alphabetical
         showOnlyTransferable = UserDefaults.standard.object(forKey: Self.showOnlyTransferableKey) as? Bool ?? true
         checkDeviceUpdates = UserDefaults.standard.object(forKey: Self.checkDeviceUpdatesKey) as? Bool ?? false
         showDeviceFileManager = UserDefaults.standard.object(forKey: Self.showDeviceFileManagerKey) as? Bool ?? false
         manageMusicOnVolumes = UserDefaults.standard.object(forKey: Self.manageMusicOnVolumesKey) as? Bool ?? false
         airPlayAsAudio = UserDefaults.standard.object(forKey: Self.airPlayAsAudioKey) as? Bool ?? true
         confirmBeforeMusicChanges = UserDefaults.standard.object(forKey: Self.confirmMusicChangesKey) as? Bool ?? true
+        interfaceFollowsSelection = UserDefaults.standard.object(forKey: Self.interfaceFollowsSelectionKey) as? Bool ?? false
         mountRemoteLibrariesAtLaunch = UserDefaults.standard.object(forKey: Self.mountRemoteAtLaunchKey) as? Bool ?? false
         libraryReadThreads = (UserDefaults.standard.object(forKey: Self.libraryReadThreadsKey) as? Int) == 1 ? 1 : 8
         let savedDetailedLog = UserDefaults.standard.object(forKey: Self.detailedLogKey) as? Bool ?? false
@@ -609,6 +648,8 @@ final class AppSettings: ObservableObject {
     func resetAllSettings() {
         UserDefaults.standard.removeObject(forKey: Self.generalKey)
         playlistTypeFilter = .all
+        customArtistFirst = false
+        albumOrder = .alphabetical
         showOnlyTransferable = true
         checkDeviceUpdates = false
         showDeviceFileManager = false
@@ -617,6 +658,7 @@ final class AppSettings: ObservableObject {
         libraryReadThreads = 8
         airPlayAsAudio = true
         confirmBeforeMusicChanges = true
+        interfaceFollowsSelection = false
         mountRemoteLibrariesAtLaunch = false
         listTextSize = .medium
         apply(.defaults)

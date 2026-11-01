@@ -251,6 +251,16 @@ struct ContentView: View {
         } message: {
             Text(vm.musicPrompt == .startup ? t("music_prompt_startup_message") : t("music_prompt_manual_message"))
         }
+        .alert(t("alert_append_title"), isPresented: Binding(get: { vm.appendProposal != nil }, set: { _ in })) {
+            Button(t("alert_append_add")) { vm.answerAppendProposal(add: true) }
+            Button(t("alert_append_only_send")) { vm.answerAppendProposal(add: false) }
+            Button(t("button_cancel"), role: .cancel) { vm.answerAppendProposal(add: nil) }
+        } message: {
+            if let p = vm.appendProposal {
+                Text(p.alreadyCount > 0 ? t("alert_append_message_dup", p.newCount, p.playlistTitle, p.alreadyCount)
+                                        : t("alert_append_message", p.newCount, p.playlistTitle))
+            }
+        }
         .alert(t("alert_tracks_only_title"), isPresented: $vm.showTracksOnlyFromPlaylistAlert) {
             Button(t("alert_tracks_only_send")) { Task { await vm.sendSelectedTracksToDevice(confirmedPartialPlaylist: true) } }
             Button(t("button_cancel"), role: .cancel) {}
@@ -431,7 +441,7 @@ struct ContentView: View {
         CatalogBrowser<LocalTrack>.RowMenu(
             canSendToDevice: vm.device != nil && !vm.isDeviceReadOnly,
             canFixArtwork: settings.lookupMissingArtworkOnline,
-            isBusy: vm.isBusy,
+            isBusy: vm.isBusy || vm.sendPreparing,
             sendToDevice: { Task { await vm.sendSelectedTracksToDevice() } },
             sendToPlaylist: { vm.addSelectedTracksToCustomPlaylist() },
             fixArtwork: { vm.startFixArtwork() },
@@ -599,7 +609,7 @@ struct ContentView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .labelStyle(CompactAwareLabelStyle())
-                .frame(width: compactPane ? nil : 130, alignment: .leading)
+                .frame(width: compactPane ? nil : 104, alignment: .leading)
             }
             .menuStyle(.button)
             .disabled(vm.isBusy)
@@ -663,7 +673,7 @@ struct ContentView: View {
                                     } label: { HStack(spacing: 6) { if !compactPane { Text(t("button_send")) }; Image(systemName: "arrow.right.circle.fill") }.frame(width: barButtonWidth) }
                                     // Stesso aspetto degli altri pulsanti della barra della Custom Playlist (Carica/Salva, Salva in Musica, Svuota).
                                     .buttonStyle(.flat)
-                                    .disabled(isCustomPlaylistEmptyOrUnnamed || vm.isDeviceReadOnly || vm.pendingExceedsFreeSpace)
+                                    .disabled(isCustomPlaylistEmptyOrUnnamed || vm.isDeviceReadOnly || vm.pendingExceedsFreeSpace || vm.sendPreparing)
                                     // Spazio insufficiente: come nelle altre schede, testo rosso e pulsante disattivato con la spiegazione.
                                     .foregroundStyle(vm.pendingExceedsFreeSpace ? AnyShapeStyle(Color.red) : AnyShapeStyle(.primary))
                                     .help(vm.pendingExceedsFreeSpace ? t("storage_pending_exceeds") : t("tooltip_send_to_device"))
@@ -673,7 +683,7 @@ struct ContentView: View {
                                     Button {
                                         Task { await vm.sendSelectedTracksToDevice() }
                                     } label: { HStack(spacing: 6) { if !compactPane { Text(t("button_send")) }; Image(systemName: "arrow.right.circle.fill") }.frame(width: barButtonWidth) }
-                                    .disabled(vm.selectedTrackIDs.isEmpty || vm.isBusy || vm.isDeviceReadOnly || vm.pendingExceedsFreeSpace)
+                                    .disabled(vm.selectedTrackIDs.isEmpty || vm.isBusy || vm.sendPreparing || vm.isDeviceReadOnly || vm.pendingExceedsFreeSpace)
                                     // Spazio insufficiente: pulsante rosso come la barra della memoria e disattivato, con la spiegazione.
                                     .foregroundStyle(vm.pendingExceedsFreeSpace ? AnyShapeStyle(Color.red) : AnyShapeStyle(.primary))
                                     .help(vm.pendingExceedsFreeSpace ? t("storage_pending_exceeds") : t("tooltip_send_to_device"))
@@ -834,8 +844,9 @@ struct ContentView: View {
                 }
                 if vm.volumeMapsAvailable {
                     Button { Task { await vm.ensureVolumeMaps(); showMapsSheet = true } } label: {
-                        Image(systemName: "map").font(.system(size: 12))
-                            .foregroundStyle(mapsGlobeColor(catalog: vm.volumeMaps, checkedAt: vm.volumeMapsCheckedAt))
+                        Image(systemName: "map.circle.fill").font(.system(size: 14))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(Color.white, mapsGlobeColor(catalog: vm.volumeMaps, checkedAt: vm.volumeMapsCheckedAt))
                     }
                     .buttonStyle(.plain)
                     .help(t("tooltip_maps_info"))
@@ -900,8 +911,9 @@ struct ContentView: View {
                 // Garmin ha restituito le informazioni sulle mappe del dispositivo: icona del mondo.
                 if vm.deviceMapsAvailable {
                     Button { Task { await vm.ensureDeviceMaps(); showMapsSheet = true } } label: {
-                        Image(systemName: "map").font(.system(size: 12))
-                            .foregroundStyle(mapsGlobeColor(catalog: vm.deviceMaps, checkedAt: vm.deviceMapsCheckedAt))
+                        Image(systemName: "map.circle.fill").font(.system(size: 14))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(Color.white, mapsGlobeColor(catalog: vm.deviceMaps, checkedAt: vm.deviceMapsCheckedAt))
                     }
                     .buttonStyle(.plain)
                     .help(t("tooltip_maps_info"))
@@ -933,7 +945,8 @@ struct ContentView: View {
                 updateCapsule("Software Updated", color: Color(red: 0.62, green: 0.84, blue: 0.62)) // verde pallido
                     .help(t("tooltip_software_updated"))
             case .available(let version, let notes):
-                updateCapsule("Upgrade Available", color: Color(red: 0.937, green: 0.604, blue: 0.604)) // rosso pallido #EF9A9A
+                // 2.3 Beta 2: la versione disponibile è scritta nella capsula (quella installata è a sinistra), non solo nel tooltip.
+                updateCapsule("Upgrade Available: \(version)", color: Color(red: 0.937, green: 0.604, blue: 0.604)) // rosso pallido #EF9A9A
                     .help([t("tooltip_update_available", version), notes].compactMap { $0 }.joined(separator: "\n\n"))
             case nil:
                 EmptyView()
@@ -992,29 +1005,18 @@ struct ContentView: View {
     }
 
     /// A destra della riga delle schede del dispositivo (come il selettore libreria in Music): Eject, Connetti/Disconnetti
-    /// e, con più memorie, il selettore della memoria (il più a destra).
-    /// - Eject: nero se si può espellere (disco rilevato, non connesso), grigio altrimenti (connesso o nulla da espellere).
+    /// e, con più memorie, il selettore della memoria. Ordine (2.3 Beta 2): Eject · selettore memoria · Connetti/Disconnetti (il più a destra).
+    /// - Eject: compare solo con l'opzione «Musica su dischi esterni e schede SD» accesa e un disco rilevato, non connesso.
     /// - Connetti / Disconnetti: cavo / cavo barrato.
     private var deviceCategoryControls: some View {
         HStack(spacing: 6) {
             let volume = vm.device == nil ? vm.volumeDevices.first : nil
-            if vm.device != nil {
-                Button { Task { await vm.disconnect() } } label: { accessoryIcon("cable.connector.slash") }
+            // Espelli (2.3 Beta 2): solo con «Musica su dischi esterni e schede SD» acceso e un disco rilevato (non connesso).
+            if settings.manageMusicOnVolumes, let volume {
+                Button { vm.ejectVolume(volume) } label: { accessoryIcon("eject.fill") }
                     .disabled(vm.isBusy)
-                    .help(t("tooltip_disconnect_device"))
-            } else if let volume {
-                // Musica su dischi e schede SD (Impostazioni ▸ Avanzate): il volume si apre come un dispositivo.
-                Button { Task { await vm.connectVolume(volume) } } label: { accessoryIcon("cable.connector") }
-                    .disabled(vm.isBusy || !(settings.manageMusicOnVolumes && volume.isMusicCapable))
-                    .help(t("tooltip_connect_device"))
-            } else {
-                Button { Task { await vm.connect() } } label: { accessoryIcon("cable.connector") }
-                    .disabled(vm.isBusy)
-                    .help(t("tooltip_connect_device"))
+                    .help(t("tooltip_eject_disk"))
             }
-            Button { if let volume { vm.ejectVolume(volume) } } label: { accessoryIcon("eject.fill") }
-                .disabled(volume == nil || vm.isBusy)
-                .help(volume == nil ? t("tooltip_eject_unavailable") : t("tooltip_eject_disk"))
             // Regola 2.0.1: il selettore compare solo se il dispositivo ha più di una memoria.
             if let device = vm.device, device.storages.count > 1 {
                 // Stesso aspetto del selettore della libreria in Music: pulsante a menu, icona + nome, larghezza fissa.
@@ -1038,6 +1040,20 @@ struct ContentView: View {
                 .menuStyle(.button)
                 .disabled(vm.isBusy)
                 .help(t("tooltip_storage_menu"))
+            }
+            if vm.device != nil {
+                Button { Task { await vm.disconnect() } } label: { accessoryIcon("cable.connector.slash") }
+                    .disabled(vm.isBusy)
+                    .help(t("tooltip_disconnect_device"))
+            } else if let volume {
+                // Musica su dischi e schede SD (Impostazioni ▸ Avanzate): il volume si apre come un dispositivo.
+                Button { Task { await vm.connectVolume(volume) } } label: { accessoryIcon("cable.connector") }
+                    .disabled(vm.isBusy || !(settings.manageMusicOnVolumes && volume.isMusicCapable))
+                    .help(t("tooltip_connect_device"))
+            } else {
+                Button { Task { await vm.connect() } } label: { accessoryIcon("cable.connector") }
+                    .disabled(vm.isBusy)
+                    .help(t("tooltip_connect_device"))
             }
         }
         .buttonStyle(.flat)
@@ -1384,7 +1400,10 @@ struct ContentView: View {
     private var activityCapsule: some View {
         HStack(spacing: 8) {
             Group {
-                if let d = vm.deletionProgress {
+                if let m = vm.musicSaveProgress {
+                    // Salvataggio su Music (solo se lungo): anello nel colore dell'interfaccia.
+                    progressRing(Double(m.done) / Double(max(m.total, 1)), color: AppSettings.shared.accentColor)
+                } else if let d = vm.deletionProgress {
                     // Eliminazione dal dispositivo (Delete / Delete All): anello ROSSO che si riempie; senza totale ancora, rotellina rossa.
                     if d.total > 0 {
                         progressRing(Double(d.current) / Double(d.total), color: .red)
@@ -1398,7 +1417,7 @@ struct ContentView: View {
                     progressRing(r.fraction, color: .green)
                 } else if vm.isBusy, let p = vm.progress {
                     // Anello che si riempie fino al completamento (come l'attività di Xcode).
-                    progressRing(p, color: .accentColor)
+                    progressRing(p, color: AppSettings.shared.accentColor)
                 } else if vm.isBusy {
                     ProgressView().controlSize(.small)
                 } else if let last = vm.notices.last {
@@ -1412,7 +1431,8 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 Text("Music Manager").font(.system(size: 12, weight: .semibold))
-                Text(vm.deletionProgress.flatMap { $0.detail.isEmpty ? nil : $0.detail }
+                Text(vm.musicSaveProgress.map { $0.cancelling ? t("music_save_cancelling") : t("music_save_progress", $0.done, $0.total) }
+                     ?? vm.deletionProgress.flatMap { $0.detail.isEmpty ? nil : $0.detail }
                      ?? vm.remotePlaybackLoading.map { "\(t("remote_playback_loading")) «\($0.title)»" }
                      ?? remoteLoader.progress.flatMap { $0.isCopying && !$0.inSettings ? "\($0.nickname): \($0.phase)" : nil }
                      ?? subtitleText)
@@ -1420,6 +1440,12 @@ struct ContentView: View {
                     .lineLimit(1).truncationMode(.tail)
             }
             Spacer(minLength: 0)
+            if let m = vm.musicSaveProgress {
+                Button(t("music_save_cancel")) { vm.cancelMusicSave() }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 12))
+                    .disabled(m.cancelling)
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 4)
         .frame(maxWidth: .infinity, minHeight: Self.capsuleHeight, maxHeight: Self.capsuleHeight, alignment: .leading)   // si allarga fino ai pulsanti a destra (prova: prima maxWidth 640)
@@ -1478,7 +1504,7 @@ struct ContentView: View {
         Button { showSearch.toggle() } label: {
             toolbarIcon("magnifyingglass")
                 .overlay(alignment: .topTrailing) {
-                    if vm.isSearchFilterActive { Circle().fill(Color.accentColor).frame(width: 8, height: 8).offset(x: -1, y: 1) }
+                    if vm.isSearchFilterActive { Circle().fill(AppSettings.shared.accentColor).frame(width: 8, height: 8).offset(x: -1, y: 1) }
                 }
         }
         .buttonStyle(.automatic)
@@ -1721,7 +1747,7 @@ struct DuplicateTracksView: View {
                         } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: selected.contains(index) ? "checkmark.square.fill" : "square")
-                                    .foregroundStyle(selected.contains(index) ? Color.accentColor : Color.secondary)
+                                    .foregroundStyle(selected.contains(index) ? AppSettings.shared.accentColor : Color.secondary)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(track.title).lineLimit(1)
                                     Text(track.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -1817,12 +1843,22 @@ struct UpdateCapsuleView: View {
     static let available = Color(red: 0.937, green: 0.604, blue: 0.604)  // rosso pallido #EF9A9A
     static let checkNeeded = Color(red: 0.98, green: 0.80, blue: 0.46)   // ambra pallido: controllo da rifare
 
+    @Environment(\.colorScheme) private var colorScheme
+    /// Build 46: in modo scuro le capsule «Software Updated» / «Map Updated» (e «Upgrade Available», in rosso, e «Check Needed», in ambra) hanno testo bianco (su un verde più profondo, per restare leggibili).
+    private var whiteOnGreen: Bool { colorScheme == .dark && color == Self.upToDate }
+    /// Idem per «Upgrade Available» (rosso più profondo).
+    private var whiteOnRed: Bool { colorScheme == .dark && color == Self.available }
+    /// Idem per «Check Needed» (ambra più scuro).
+    private var whiteOnAmber: Bool { colorScheme == .dark && color == Self.checkNeeded }
+
     var body: some View {
         Text(text)
             .font(.system(size: fontSize, weight: .medium))
             .padding(.horizontal, fontSize * 0.75).padding(.vertical, fontSize * 0.125)
-            .background(color, in: Capsule())
-            .foregroundStyle(Color.black)
+            .background(whiteOnGreen ? Color(red: 0.20, green: 0.52, blue: 0.27)
+                        : (whiteOnRed ? Color(red: 0.74, green: 0.24, blue: 0.24)
+                           : (whiteOnAmber ? Color(red: 0.72, green: 0.45, blue: 0.08) : color)), in: Capsule())
+            .foregroundStyle(whiteOnGreen || whiteOnRed || whiteOnAmber ? Color.white : Color.black)
             .fixedSize()
     }
 }
@@ -1873,6 +1909,11 @@ private struct DeviceUpdateSheet: View {
                         badge(row).frame(width: 150, alignment: .leading)
                         Text(row.name).lineLimit(1)
                         Spacer(minLength: 0)
+                        // Versione installata → disponibile, senza dover passare sul pallino.
+                        if case .available(let version, _) = row.status {
+                            Text(row.installed.map { "\($0) → \(version)" } ?? version)
+                                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        }
                     }
                     .padding(.vertical, 8).padding(.horizontal, 12)
                     if row.id != rows.last?.id { Divider() }
@@ -2866,7 +2907,7 @@ struct DeviceFileBrowserView: View {
                 TableColumn(t("device_files_col_name"), value: \.nameKey) { row in
                     HStack(spacing: 8) {
                         Image(systemName: row.isFolder ? "folder" : "doc").frame(width: 18)
-                            .foregroundStyle(row.isFolder ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(row.isFolder ? AppSettings.shared.accentColor : Color.secondary)
                         Text(row.entry.name).lineLimit(1).truncationMode(.middle)
                         if let mark = row.mark {
                             Text(mark.text)

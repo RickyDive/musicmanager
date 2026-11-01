@@ -82,7 +82,7 @@ struct SettingsView: View {
                             Text(t(item.key)).font(.caption)
                         }
                         .frame(width: 86, height: 46)
-                        .background(pane == item ? Color.accentColor.opacity(0.22) : Color.clear,
+                        .background(pane == item ? settings.accentColor.opacity(0.22) : Color.clear,
                                     in: RoundedRectangle(cornerRadius: 8))
                         .contentShape(Rectangle())
                     }
@@ -209,6 +209,20 @@ struct SettingsView: View {
                     }
                 }
                 .labelsHidden()
+            }
+
+            settingRow(t("settings_album_order"), hint: t("settings_album_order_hint")) {
+                Picker("", selection: $settings.albumOrder) {
+                    ForEach(AppSettings.AlbumOrder.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .labelsHidden()
+            }
+
+            settingRow(t("settings_custom_artist_first"), hint: t("settings_custom_artist_first_hint")) {
+                Toggle("", isOn: $settings.customArtistFirst)
+                    .labelsHidden().toggleStyle(.switch)
             }
 
             settingRow(t("settings_show_only_transferable"), hint: t("settings_show_only_transferable_hint")) {
@@ -368,6 +382,15 @@ struct SettingsView: View {
                 Text(t("settings_highlight_color_hint"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            // Colore dell'interfaccia (2.3 Beta 2): Sistema oppure lo stesso colore delle righe selezionate.
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle(t("settings_interface_color"), isOn: $settings.interfaceFollowsSelection)
+                Text(t("settings_interface_color_hint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             // Dimensione del testo negli elenchi: cinque posizioni, tre nomi sotto la barra. Tutto in un'unica riga del
@@ -728,8 +751,9 @@ struct SettingsView: View {
                             Color.clear
                             if hasMapsData(device) {
                                 Button { openMaps(forDevice: device.id) } label: {
-                                    Image(systemName: "map").font(.system(size: 12))
-                                        .foregroundStyle(deviceGlobeColor(device))
+                                    Image(systemName: "map.circle.fill").font(.system(size: 14))
+                                        .symbolRenderingMode(.palette)
+                                        .foregroundStyle(Color.white, deviceGlobeColor(device))
                                 }
                                 .buttonStyle(.plain)
                                 .help(mapsTooltip(device))
@@ -739,8 +763,9 @@ struct SettingsView: View {
                         HStack(spacing: 5) {
                             Text(device.softwareVersion.isEmpty ? "—" : device.softwareVersion).lineLimit(1)
                             if let ok = device.softwareUpToDate {
-                                Image(systemName: ok ? "checkmark.circle" : "xmark.circle")
-                                    .foregroundStyle(ok ? statusIconGreen : statusIconRed)
+                                Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(Color.white, ok ? statusIconGreen : statusIconRed)
                                     .help(ok ? "Software Updated" : "Upgrade Available")
                             }
                         }
@@ -930,7 +955,7 @@ struct SettingsView: View {
                     }
                     .font(.system(size: 11))
                     .frame(height: tableRowHeight)
-                    .background(isSelected ? Color.accentColor.opacity(0.28) : stripe)
+                    .background(isSelected ? AppSettings.shared.accentColor.opacity(0.28) : stripe)
                     .contentShape(Rectangle())
                     .simultaneousGesture(TapGesture().onEnded { selectedLibrary = lib.id })
                 }
@@ -1069,7 +1094,7 @@ struct SettingsView: View {
                     }
                     .font(.system(size: 11))
                     .frame(height: tableRowHeight)
-                    .background(selectedDriveID == lib.id ? Color.accentColor.opacity(0.28) : stripe)
+                    .background(selectedDriveID == lib.id ? settings.accentColor.opacity(0.28) : stripe)
                     .contentShape(Rectangle())
                     .simultaneousGesture(TapGesture().onEnded { selectedDriveID = lib.id })
                 }
@@ -1338,12 +1363,15 @@ private struct NativeSlider: NSViewRepresentable {
         slider.allowsTickMarkValuesOnly = tickMarks > 0
         slider.isContinuous = true
         slider.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        slider.trackFillColor = AppSettings.shared.interfaceTint.map { NSColor($0) }
         return slider
     }
 
     func updateNSView(_ slider: NSSlider, context: Context) {
         context.coordinator.parent = self
         if slider.doubleValue != value { slider.doubleValue = value }
+        // 2.3 Beta 2: la parte piena del cursore segue il colore dell'interfaccia (nil = colore di sistema).
+        slider.trackFillColor = AppSettings.shared.interfaceTint.map { NSColor($0) }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSSlider, context: Context) -> CGSize? {
@@ -1367,7 +1395,7 @@ private struct AppearanceMock: View {
         let background = dark ? Color(white: 0.12) : Color(white: 0.95)
         let panel = dark ? Color.white.opacity(0.10) : Color.white
         let line = dark ? Color.white.opacity(0.28) : Color.black.opacity(0.16)
-        let accent = Color.accentColor
+        let accent = AppSettings.shared.accentColor
         VStack(spacing: 2) {
             HStack(spacing: 2) {
                 Capsule().fill(accent).frame(width: 14, height: 4)
@@ -1418,7 +1446,7 @@ private struct AppearanceTile: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.35),
+                            .stroke(isSelected ? AppSettings.shared.accentColor : Color.secondary.opacity(0.35),
                                     lineWidth: isSelected ? 3 : 1)
                     )
                 Text(option.title)
@@ -1594,7 +1622,7 @@ private struct SwatchRing: ViewModifier {
         content
             .overlay {
                 if selected {
-                    Circle().stroke(Color.accentColor, lineWidth: 2.5).padding(-4)
+                    Circle().stroke(AppSettings.shared.accentColor, lineWidth: 2.5).padding(-4)
                 }
             }
     }

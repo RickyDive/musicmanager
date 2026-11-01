@@ -252,7 +252,7 @@ struct FlatButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         let destructive = configuration.role == .destructive
         let foreground: Color = destructive ? .red : (prominent ? .white : .primary)
-        let fill: Color = destructive ? Color.red.opacity(0.22) : (prominent ? Color.accentColor : Color.primary.opacity(0.10))
+        let fill: Color = destructive ? Color.red.opacity(0.22) : (prominent ? AppSettings.shared.accentColor : Color.primary.opacity(0.10))
         let vertical: CGFloat = controlSize == .large ? 9 : (controlSize == .small || controlSize == .mini ? 3 : 6)
         configuration.label
             .foregroundStyle(foreground)

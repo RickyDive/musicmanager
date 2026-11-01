@@ -67,6 +67,12 @@ enum ArtworkCache {
         return try? Data(contentsOf: directory.appendingPathComponent(entry.imageFileName))
     }
 
+    /// Chiavi delle copertine scelte dall'utente (online o nel pannello di importazione), cioè le voci che non sono semplici
+    /// copie di quelle di Musica. Una sola lettura dell'indice: serve a decidere in fretta quali brani mostrare con la copertina scelta.
+    static func chosenKeys() -> Set<String> {
+        Set(loadIndex().filter { $0.value.fromApple != true }.keys)
+    }
+
     static func isPushedToDevice(key: String) -> Bool {
         loadIndex()[key]?.pushedToDevice ?? false
     }
@@ -87,7 +93,9 @@ enum ArtworkCache {
         }
         index[key] = Entry(imageFileName: fileName, pushedToDevice: false, fromApple: fromApple ? true : nil)
         if chosenOnline && !fromApple { chosenOnlineThisSession.insert(key) } else { chosenOnlineThisSession.remove(key) }
-        return saveIndex(index)
+        let saved = saveIndex(index)
+        if saved { NotificationCenter.default.post(name: didChangeChosenNotification, object: nil) }
+        return saved
     }
 
     /// Segna che questa copertina è ora presente sul dispositivo (vedi `Entry.pushedToDevice`).
@@ -118,6 +126,8 @@ enum ArtworkCache {
     /// Notifica inviata dopo lo svuotamento: il view model azzera le origini già calcolate (altrimenti i brani risultano ancora
     /// «con copertina» dalla cache appena cancellata, e Fix Artwork non li propone).
     static let didClearNotification = Notification.Name("ArtworkCacheDidClear")
+    /// Inviata quando si memorizza una copertina scelta dall'utente: chi tiene in memoria `chosenKeys()` deve rileggerle.
+    static let didChangeChosenNotification = Notification.Name("ArtworkCacheDidChangeChosen")
 
     static func clearAll() {
         try? FileManager.default.removeItem(at: directory)
