@@ -4,7 +4,7 @@
 
 App per macOS che trasferisce musica, album e playlist dalla libreria dell'app **Musica** a un orologio **Garmin** (Fenix, Forerunner, Edge…) via USB (MTP), e ne gestisce il contenuto.
 
-> **Versione 2.1.** Il feedback è benvenuto: apri una [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
+> **Versione 2.3.** Il feedback è benvenuto: apri una [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
 > Progetto indipendente, non affiliato né approvato da Garmin o Apple.
 
 > **Ambito:** la musica va in un solo senso, dalla libreria del Mac al dispositivo. L'app non copia mai audio da un dispositivo e non accede alle librerie di altri dispositivi. Vedi [docs/SCOPE.md](docs/SCOPE.md).
@@ -52,17 +52,20 @@ Per creare il DMG: `Scripts/build-release.sh` (vedi [docs/RELEASING.md](docs/REL
 ## Note sulla privacy
 L'app non invia dati a server propri. Funzione opzionale (spenta di default): il controllo aggiornamenti software chiede ai server Garmin se esiste una nuova versione, inviando il contenuto di `GarminDevice.xml` tramite un servizio non documentato.
 
-## Novità della 2.2
-- **Librerie su unità esterna** (Impostazioni ▸ Avanzate, fino a 3): una cartella di file audio su una chiavetta USB, un disco o una cartella di rete diventa una libreria, con un indice proprio creato dai tag. Restano solo i formati che il tuo Garmin accetta; FLAC, WAV, AIFF e ALAC sono mostrati ma non inviabili. Riscansione incrementale, copertine dai file, pulsante **Espelli**.
-- **Librerie remote (di rete)**: montaggio più affidabile (si controlla prima il server, niente lunghe attese né errori di sistema), interruttore **Monta automaticamente** e pallino di stato a tre stati, avanzamento in tempo reale della prima lettura dell'XML, avviso quando l'XML sul server è cambiato, riproduzione con caricamento e riconoscimento della connessione lenta, smontaggio dei volumi montati dall'app alla chiusura.
-- **Musica e copertine**: una domanda prima di aggiungere brani a Musica (Impostazioni ▸ Generale), pannello delle copertine online ridisegnato, avvio più veloce (percorsi salvati, libreria riletta al ritorno nell'app), opzione *Thread per leggere la libreria*, duplicati elencati con una casella per ogni brano.
-- **Interfaccia**: barre di vetro fluttuanti, barra del titolo in stile Xcode con capsula di attività, un solo aggiorna e una sola ricerca (⌘F), campanella delle notifiche, finestre di vetro centrate, modalità compatta per le risoluzioni basse, menu del tasto destro e mini player più ricchi, un solo evidenziatore arrotondato per la selezione, digitazione negli elenchi con il testo nell'indicatore della lettera, tre tabelle uguali nelle Impostazioni, testi italiani rivisti e nuova icona.
+## Novità della 2.3
+- **Velocità con librerie molto grandi**: misurato su una libreria di rete da 55.000 brani, i blocchi di 1–15 s sui clic sono diventati per lo più sotto il secondo, la memoria resta intorno a 400–700 MB invece di arrivare a 1,6 GB, e la digitazione per posizionarsi in un elenco è passata da 7–15 s a 0,01–0,2 s. Un'opzione *Registro dettagliato* nelle Impostazioni registra i tempi per la diagnostica.
+- **Playlist**: le stesse cartelle di Apple Music (libreria locale), una miniatura per ogni playlist, e *Invia* propone di aggiungere i brani alla playlist selezionata sull'orologio.
+- **Album, Artisti, Brani**: album per data di aggiunta, scheda Artisti con miniature rotonde (Artista ▸ Album ▸ Brani), digitazione negli elenchi che ignora gli articoli iniziali («rolling» trova «The Rolling Stones») e dimensione del testo che scala anche la seconda riga.
+- **Custom Playlist**: opzione *Artista in evidenza*, indicatori ×N per artisti, album o brani ripetuti, selezione più chiara.
+- **Fix Artwork**: fino a 10 candidate online, **Revert** alla copertina di Musica, aggiunta di una copertina a mano (trascinamento o ⌘V) e domanda «Ignorare tutto l'album?».
+- **Orologio e riproduzione**: un'icona indica i brani che sono in una playlist sull'orologio; avvisi di aggiornamento di software e mappe; il **telecomando dell'Apple TV** comanda la riproduzione; il salvataggio in Musica procede a blocchi con una capsula di avanzamento e il pulsante Annulla.
+- **Licenza**: note GNU GPL v3 o successiva in ogni file sorgente, nella finestra Informazioni e nell'immagine disco (`LICENSE.txt`).
 
 **Da sapere:** con le librerie remote la prima lettura è lenta e le aperture successive sono immediate; lì la digitazione negli elenchi posiziona solo sulla prima lettera, quindi usa la ricerca con la lente. Con due condivisioni dallo stesso nome il Finder può lasciare una voce «fantasma» vuota dopo lo smontaggio (`killall Finder` o un riavvio la elimina). Il controllo degli aggiornamenti software segue la distribuzione a gruppi di Garmin, come Garmin Express.
 
-**Limiti noti:** non provata su macOS 26 (sviluppata e provata su macOS 27); non notarizzata (vedi [docs/INSTALL.md](docs/INSTALL.md) se il primo avvio è bloccato); i formati lossless non vengono convertiti né inviati; le playlist trovate nella cartella di un'unità non si importano; nessun controllo dell'app dall'Apple TV; ricevitori AirPlay molto vecchi possono essere rifiutati da macOS stesso.
+**Limiti noti:** non provata su macOS 26 (sviluppata e provata su macOS 27); non notarizzata (vedi [docs/INSTALL.md](docs/INSTALL.md) se il primo avvio è bloccato); i formati lossless non vengono convertiti né inviati; le playlist trovate nella cartella di un'unità non si importano; ricevitori AirPlay molto vecchi possono essere rifiutati da macOS stesso; i file playlist `.m3u` per un dispositivo che dichiara solo M3U non si sono potuti provare.
 
-Cronologia completa (in inglese): [CHANGELOG.md](CHANGELOG.md). Testo della release: [docs/RELEASE-NOTES-2.2.md](docs/RELEASE-NOTES-2.2.md).
+Cronologia completa (in inglese): [CHANGELOG.md](CHANGELOG.md). Testo della release: [docs/RELEASE-NOTES-2.3.md](docs/RELEASE-NOTES-2.3.md).
 
 ## Licenza e versione ufficiale
 Music Manager è software libero: puoi ridistribuirlo e/o modificarlo secondo i termini della **GNU General Public License, versione 3 o (a tua scelta) qualsiasi versione successiva** (file [LICENSE](LICENSE)). È distribuito senza alcuna garanzia. Copyright (C) 2026 Riccardo Colaiori (cr.developer).

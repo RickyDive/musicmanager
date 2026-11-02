@@ -4,7 +4,7 @@
 
 A macOS app that transfers music, albums and playlists from the **Music** app library to a **Garmin** watch (Fenix, Forerunner, Edge…) over USB (MTP), and manages what is on the watch.
 
-> **Version 2.2.** Feedback is welcome: open an [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
+> **Version 2.3.** Feedback is welcome: open an [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
 > Independent project, not affiliated with or endorsed by Garmin or Apple.
 
 > **Scope:** music flows one way, from your Mac library to the device. The app never copies audio from a device and does not access other devices' libraries. See [docs/SCOPE.md](docs/SCOPE.md).
@@ -53,17 +53,20 @@ To build the DMG: `Scripts/build-release.sh` (see [docs/RELEASING.md](docs/RELEA
 ## Privacy
 The app sends no data to servers of its own. Optional feature (off by default): the software update check asks Garmin's servers whether a new version exists, sending the contents of `GarminDevice.xml` through an undocumented service.
 
-## What is new in 2.2
-- **External Drive Libraries** (Settings ▸ Advanced, up to 3): a folder of audio files on a USB drive, disk or network folder becomes a library, with its own index built from the tags. Only formats your Garmin accepts are kept; FLAC, WAV, AIFF and ALAC are shown but cannot be sent. Incremental rescan, covers from the files, **Eject** button.
-- **Remote (network) libraries**: more reliable mounting (the server is checked first, no long waits or system errors), the **Mount automatically** switch and a three-state status dot, live progress of the first XML read, a warning when the XML on the server has changed, playback with loading and slow-connection detection, and unmount of the volumes the app mounted when it quits.
-- **Music and artwork**: a question before adding songs to Music (Settings ▸ General), a redesigned online artwork panel, faster start (saved file paths, library re-read when you return to the app), a *Threads to read the library* option, duplicates listed with a checkbox for each song.
-- **Interface**: floating glass bars, an Xcode-style title bar with an activity capsule, one refresh and one search (⌘F), a notification bell, centred glass dialogs, a compact mode for low resolutions, richer right-click menus and mini player, one rounded selection highlight, typing in lists with the typed text in the letter indicator, three Settings tables with the same layout, revised Italian texts and a new icon.
+## What is new in 2.3
+- **Speed with very large libraries**: measured on a 55,000-song network library, freezes of 1–15 s on clicks became mostly under 1 s, memory stays around 400–700 MB instead of reaching 1.6 GB, and typing to jump in a list went from 7–15 s to 0.01–0.2 s. A *Detailed log* option in Settings records timings for diagnostics.
+- **Playlists**: the same folders as in Apple Music (local library), a thumbnail for every playlist, and *Send* offers to add the songs to the playlist selected on the watch.
+- **Albums, Artists, Songs**: albums by date added, an Artists tab with round thumbnails (Artist ▸ Albums ▸ Songs), typing in lists that ignores leading articles («rolling» finds «The Rolling Stones»), and a text size that also scales the second line.
+- **Custom Playlist**: *Artist first* option, ×N badges for repeated artists, albums or songs, clearer selection.
+- **Fix Artwork**: up to 10 online candidates, **Revert** to Music's own cover, add a cover by hand (drag and drop or ⌘V), and an «Ignore the whole album?» question.
+- **Watch and playback**: an icon marks the songs that are in a playlist on the watch; software and maps update notices; the **Apple TV remote** controls playback; saving to Music runs in batches with a progress capsule and a Cancel button.
+- **Licence**: GNU GPL v3 or later notices in every source file, in the About window and in the disk image (`LICENSE.txt`).
 
-**Good to know:** with remote libraries the first read is slow and later opens are instant; typing in lists positions only on the first letter there, so use the magnifier search. With two shares of the same name the Finder can keep an empty "ghost" entry after unmounting (`killall Finder` or a restart clears it). The software update check follows Garmin's staged distribution, as Garmin Express does.
+**Good to know:** with remote libraries the first read is slow and later opens are instant; typing in lists positions only on the first letter there, so use the magnifier search. With two shares of the same name the Finder can keep an empty «ghost» entry after unmounting (`killall Finder` or a restart clears it). The software update check follows Garmin's staged distribution, as Garmin Express does.
 
-**Known limits:** not tested on macOS 26 (developed and tested on macOS 27); not notarized (see [docs/INSTALL.md](docs/INSTALL.md) if the first launch is blocked); lossless formats are not converted or sent; playlists found in a drive folder are not imported; no remote control of the app from the Apple TV; very old AirPlay receivers may be refused by macOS itself.
+**Known limits:** not tested on macOS 26 (developed and tested on macOS 27); not notarized (see [docs/INSTALL.md](docs/INSTALL.md) if the first launch is blocked); lossless formats are not converted or sent; playlists found in a drive folder are not imported; very old AirPlay receivers may be refused by macOS itself; playlist files as `.m3u` for a device that declares only M3U could not be tested.
 
-Full history: [CHANGELOG.md](CHANGELOG.md). Release text: [docs/RELEASE-NOTES-2.2.md](docs/RELEASE-NOTES-2.2.md).
+Full history: [CHANGELOG.md](CHANGELOG.md). Release text: [docs/RELEASE-NOTES-2.3.md](docs/RELEASE-NOTES-2.3.md).
 
 ## License and official version
 Music Manager is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License, version 3 or (at your option) any later version** ([LICENSE](LICENSE) file). It comes with no warranty. Copyright (C) 2026 Riccardo Colaiori (cr.developer).
