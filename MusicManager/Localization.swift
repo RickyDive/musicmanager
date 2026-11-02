@@ -1,3 +1,19 @@
+// Music Manager
+// Copyright (C) 2026 Riccardo Colaiori
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 import Foundation
 import SwiftUI
 
@@ -1160,8 +1176,8 @@ private enum L {
             .it: "Versione %1$@ (%2$@)", .en: "Version %1$@ (%2$@)"
         ],
         "about_copyright": [
-            .it: "© 2026 Music Manager. Tutti i diritti riservati. Garmin è un marchio di Garmin Ltd.; Apple e Apple Music sono marchi di Apple Inc., registrati negli Stati Uniti e in altri paesi.",
-            .en: "© 2026 Music Manager. All rights reserved. Garmin is a trademark of Garmin Ltd.; Apple and Apple Music are trademarks of Apple Inc., registered in the United States and other countries."
+            .it: "© 2026 Riccardo Colaiori. Software libero con licenza GNU GPL v3 o successiva. Garmin è un marchio di Garmin Ltd.; Apple e Apple Music sono marchi di Apple Inc., registrati negli Stati Uniti e in altri paesi.",
+            .en: "© 2026 Riccardo Colaiori. Free software under the GNU GPL v3 or later. Garmin is a trademark of Garmin Ltd.; Apple and Apple Music are trademarks of Apple Inc., registered in the United States and other countries."
         ],
         "help_save_device_tree": [
             .it: "Salva albero del dispositivo (diagnostica)", .en: "Save Device File Tree (Diagnostics)"
@@ -1245,8 +1261,8 @@ private enum L {
             .it: "Note legali", .en: "Legal Notices"
         ],
         "about_legal_text": [
-            .it: "Music Manager non è affiliato, sponsorizzato né approvato da Garmin Ltd. o da Apple Inc. Garmin, Apple, Apple Music e iTunes sono marchi dei rispettivi proprietari.\n\nMusic Manager è software libero, distribuito con licenza GNU GPL v3.0 (© 2026 Riccardo Colaiori, cr.developer). Il codice sorgente è su github.com/RickyDive/musicmanager.\n\nIl trasferimento verso l'orologio usa le librerie libmtp e libusb (LGPL), incluse nell'app come librerie separate (Aiuto ▸ Licenze di terze parti). La libreria musicale viene letta tramite il framework iTunesLibrary di Apple; le librerie condivise in rete vengono lette solo da un file XML esportato e da una cartella montata.",
-            .en: "Music Manager is not affiliated with, sponsored or endorsed by Garmin Ltd. or Apple Inc. Garmin, Apple, Apple Music and iTunes are trademarks of their respective owners.\n\nMusic Manager is free software, released under the GNU GPL v3.0 (© 2026 Riccardo Colaiori, cr.developer). The source code is at github.com/RickyDive/musicmanager.\n\nTransfers to the watch use the libmtp and libusb libraries (LGPL), included in the app as separate libraries (Help ▸ Third-Party Licenses). The music library is read through Apple's iTunesLibrary framework; network-shared libraries are read only from an exported XML file and a mounted folder."
+            .it: "Music Manager non è affiliato, sponsorizzato né approvato da Garmin Ltd. o da Apple Inc. Garmin, Apple, Apple Music e iTunes sono marchi dei rispettivi proprietari.\n\nMusic Manager è software libero: puoi ridistribuirlo e/o modificarlo secondo i termini della GNU General Public License, versione 3 o (a tua scelta) qualsiasi versione successiva. È distribuito senza alcuna garanzia. © 2026 Riccardo Colaiori, cr.developer. Il codice sorgente è su github.com/RickyDive/musicmanager: le versioni finali nella branch main, le beta nella branch beta, con il tag corrispondente alla versione dell'app.\n\nIl trasferimento verso l'orologio usa le librerie libmtp e libusb (LGPL), incluse nell'app come librerie separate (Aiuto ▸ Licenze di terze parti). La libreria musicale viene letta tramite il framework iTunesLibrary di Apple; le librerie condivise in rete vengono lette solo da un file XML esportato e da una cartella montata.",
+            .en: "Music Manager is not affiliated with, sponsored or endorsed by Garmin Ltd. or Apple Inc. Garmin, Apple, Apple Music and iTunes are trademarks of their respective owners.\n\nMusic Manager is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License, version 3 or (at your option) any later version. It comes with no warranty. © 2026 Riccardo Colaiori, cr.developer. The source code is at github.com/RickyDive/musicmanager: final releases on the main branch, betas on the beta branch, each with a tag matching the app version.\n\nTransfers to the watch use the libmtp and libusb libraries (LGPL), included in the app as separate libraries (Help ▸ Third-Party Licenses). The music library is read through Apple's iTunesLibrary framework; network-shared libraries are read only from an exported XML file and a mounted folder."
         ],
         "alert_random_to_manual_title": [
             .it: "Tornare all'ordine Manuale?", .en: "Go back to Manual order?"

@@ -1,7 +1,7 @@
 Music Manager – Third-Party Licenses / Licenze di terze parti
 
-Music Manager is free software: GNU General Public License v3.0. Copyright (C) 2026 Riccardo Colaiori (cr.developer).
-Music Manager è software libero: licenza GNU GPL v3.0. Copyright (C) 2026 Riccardo Colaiori (cr.developer).
+Music Manager is free software: GNU General Public License, version 3 or (at your option) any later version. Copyright (C) 2026 Riccardo Colaiori (cr.developer).
+Music Manager è software libero: licenza GNU GPL, versione 3 o (a tua scelta) successiva. Copyright (C) 2026 Riccardo Colaiori (cr.developer).
 Source code / Codice sorgente: https://github.com/RickyDive/musicmanager
 The exact versions of the libraries below are listed in Contents/Resources/BUNDLED-LIBS.txt.
 Le versioni esatte delle librerie sotto sono in Contents/Resources/BUNDLED-LIBS.txt.

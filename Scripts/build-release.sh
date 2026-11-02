@@ -1,4 +1,20 @@
 #!/bin/bash
+# Music Manager
+# Copyright (C) 2026 Riccardo Colaiori
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 # Compila in Release e crea il DMG da pubblicare su GitHub Releases. Richiede: xcodegen, libmtp, libusb (brew install libmtp libusb xcodegen).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -19,6 +35,7 @@ STAGE="build/dmg"; rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 cp docs/INSTALL.md "$STAGE/READ ME.txt"
+cp LICENSE "$STAGE/LICENSE.txt"
 DMG="build/MusicManager-$VER.dmg"
 rm -f "$DMG"
 # `hdiutil create` è deprecato (avviso: usare `diskutil image create from`). Si prova prima il comando nuovo; se non è disponibile

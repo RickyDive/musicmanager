@@ -8,7 +8,10 @@ targets:
     type: application
     platform: macOS
     sources:
-      - MusicManager
+      - path: MusicManager
+        excludes:
+          - "**/*.prima-*"
+          - "**/*.via1-fallita"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.crdev.MusicManager
@@ -54,8 +57,8 @@ targets:
       properties:
         CFBundleName: Music Manager
         CFBundleDisplayName: Music Manager
-        CFBundleShortVersionString: "2.3 Beta 3"
-        CFBundleVersion: "47"
+        CFBundleShortVersionString: "2.3"
+        CFBundleVersion: "48"
         LSMinimumSystemVersion: "26.0"
         LSApplicationCategoryType: public.app-category.utilities
         NSPrincipalClass: NSApplication

@@ -65,10 +65,11 @@ L'app non invia dati a server propri. Funzione opzionale (spenta di default): il
 Cronologia completa (in inglese): [CHANGELOG.md](CHANGELOG.md). Testo della release: [docs/RELEASE-NOTES-2.2.md](docs/RELEASE-NOTES-2.2.md).
 
 ## Licenza e versione ufficiale
-Music Manager è software libero, distribuito con licenza **GNU GPL v3.0** (file [LICENSE](LICENSE)). Copyright (C) 2026 Riccardo Colaiori (cr.developer).
-- Puoi usare, studiare e modificare il codice; se distribuisci una versione modificata devi pubblicarne il sorgente con la stessa licenza.
+Music Manager è software libero: puoi ridistribuirlo e/o modificarlo secondo i termini della **GNU General Public License, versione 3 o (a tua scelta) qualsiasi versione successiva** (file [LICENSE](LICENSE)). È distribuito senza alcuna garanzia. Copyright (C) 2026 Riccardo Colaiori (cr.developer).
+- Puoi usare, studiare e modificare il codice; se distribuisci una versione modificata, devi dare a chi la riceve il codice sorgente con la stessa licenza.
 - **Versione ufficiale:** l'unico canale ufficiale è la pagina [Releases](https://github.com/RickyDive/musicmanager/releases) di questo repository. Confronta sempre l'hash del DMG con il file `.sha256` allegato (`shasum -a 256 <file>.dmg`).
+- **Sorgenti:** il codice sorgente di ogni release è in questo repository: le versioni finali nella branch `main` (tag `vX.Y`), le beta nella branch `beta` (tag `vX.Y-BetaN`). Gli archivi «Source code» di ogni pagina [Releases](https://github.com/RickyDive/musicmanager/releases) contengono esattamente i sorgenti di quella build.
 - Le versioni modificate e ridistribuite devono usare un nome diverso e non presentarsi come ufficiali né come approvate dall'autore.
-- Le modifiche si propongono con una Pull Request; le accetta l'autore.
+- Le modifiche si propongono con una Pull Request; le accetta l'autore. I contributi sono accolti con la stessa licenza (GPL v3 o successiva).
 
-Incorpora **libmtp** e **libusb** (LGPL 2.1+), collegate dinamicamente: vedi [licenses/](licenses/README.md). Note tecniche (in inglese): [docs/PROJECT-NOTES.md](docs/PROJECT-NOTES.md).
+Incorpora **libmtp** e **libusb** (LGPL 2.1+), collegate dinamicamente: vedi [licenses/](licenses/README.md). I loro sorgenti: https://github.com/libmtp/libmtp e https://github.com/libusb/libusb; le versioni incluse sono indicate nelle note di ogni release. Note tecniche (in inglese): [docs/PROJECT-NOTES.md](docs/PROJECT-NOTES.md).

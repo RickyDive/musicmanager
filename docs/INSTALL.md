@@ -21,3 +21,6 @@ Requirements: Apple Silicon Mac, macOS 26 or later, Garmin watch with USB cable.
 4. If the watch is not detected: quit Garmin Express / Android File Transfer / Image Capture and reconnect the cable.
 
 Problems? Help ▸ "Copy Diagnostic Information" and paste it in your GitHub issue. If the app cannot even open, include your macOS version and the method you used.
+
+## License and sources
+Music Manager is free software (GNU GPL, version 3 or any later version; see LICENSE.txt in this disk image). Its source code is at https://github.com/RickyDive/musicmanager: final releases on the `main` branch, betas on the `beta` branch, with the tag matching the app version. The bundled libmtp and libusb (LGPL 2.1 or later) have their sources at https://github.com/libmtp/libmtp and https://github.com/libusb/libusb; the versions included are listed in `BUNDLED-LIBS.txt` inside the app (Contents/Resources) and in the release notes.

@@ -66,10 +66,11 @@ The app sends no data to servers of its own. Optional feature (off by default): 
 Full history: [CHANGELOG.md](CHANGELOG.md). Release text: [docs/RELEASE-NOTES-2.2.md](docs/RELEASE-NOTES-2.2.md).
 
 ## License and official version
-Music Manager is free software, released under the **GNU GPL v3.0** ([LICENSE](LICENSE) file). Copyright (C) 2026 Riccardo Colaiori (cr.developer).
-- You may use, study and modify the code; if you distribute a modified version you must publish its source under the same license.
+Music Manager is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License, version 3 or (at your option) any later version** ([LICENSE](LICENSE) file). It comes with no warranty. Copyright (C) 2026 Riccardo Colaiori (cr.developer).
+- You may use, study and modify the code; if you distribute a modified version, you must give its recipients the source code under the same license.
 - **Official version:** the only official channel is the [Releases](https://github.com/RickyDive/musicmanager/releases) page of this repository. Always compare the DMG's hash with the attached `.sha256` file (`shasum -a 256 <file>.dmg`).
+- **Sources:** the source code of every release is in this repository: final releases on the `main` branch (tags `vX.Y`), betas on the `beta` branch (tags `vX.Y-BetaN`). The «Source code» archives on each [Release](https://github.com/RickyDive/musicmanager/releases) page contain exactly the sources of that build.
 - Modified and redistributed versions must use a different name and must not present themselves as official or as endorsed by the author.
-- Changes are proposed through a Pull Request; the author reviews and accepts them.
+- Changes are proposed through a Pull Request; the author reviews and accepts them. Contributions are accepted under the same license (GPL v3 or later).
 
-Bundles **libmtp** and **libusb** (LGPL 2.1+), dynamically linked: see [licenses/](licenses/README.md). Technical notes: [docs/PROJECT-NOTES.md](docs/PROJECT-NOTES.md).
+Bundles **libmtp** and **libusb** (LGPL 2.1+), dynamically linked: see [licenses/](licenses/README.md). Their sources: https://github.com/libmtp/libmtp and https://github.com/libusb/libusb; the versions included are listed in the notes of each release. Technical notes: [docs/PROJECT-NOTES.md](docs/PROJECT-NOTES.md).
