@@ -18,7 +18,7 @@ Requirements: Apple Silicon Mac, macOS 26 or later, Garmin watch with USB cable.
    If the app does not open and stays stuck (even Force Quit may not be enough): restart the Mac and use Method A before opening it again.
 
 3. On first read/send macOS asks permission to control "Music" (automation): click OK. Without it the app cannot read your library or create playlists. If you denied it by mistake: System Settings ▸ Privacy & Security ▸ Automation ▸ Music Manager ▸ enable "Music".
-4. If the watch is not detected: quit Garmin Express / Android File Transfer / Image Capture and reconnect the cable.
+4. If the watch is not detected: quit Garmin Express, Garmin Connect, OpenMTP, Android File Transfer and Image Capture, then reconnect the cable.
 
 Problems? Help ▸ "Copy Diagnostic Information" and paste it in your GitHub issue. If the app cannot even open, include your macOS version and the method you used.
 
