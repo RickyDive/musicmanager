@@ -163,8 +163,29 @@ actor MTPService {
         volumeRoot == nil ? nil : [volumeStorage()]
     }
 
+    /// Memorie con lo spazio libero riletto ora: dal volume (modalità volume) o da libmtp (`LIBMTP_Get_Storage` aggiorna i valori
+    /// letti alla connessione). nil se non c'è nessun dispositivo.
+    func currentStorages() -> [MTPStorage]? {
+        if volumeRoot != nil { return [volumeStorage()] }
+        guard let dev = device else { return nil }
+        _ = LIBMTP_Get_Storage(dev, 0)
+        var out: [MTPStorage] = []
+        var node = dev.pointee.storage
+        while let st = node {
+            out.append(MTPStorage(id: st.pointee.id,
+                                  name: st.pointee.StorageDescription.map { String(cString: $0) } ?? t("label_storage"),
+                                  capacity: st.pointee.MaxCapacity,
+                                  free: st.pointee.FreeSpaceInBytes))
+            node = st.pointee.next
+        }
+        return out.isEmpty ? nil : out
+    }
+
     private func volumeStorage() -> MTPStorage {
-        let values = try? volumeRoot?.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityKey])
+        // URL nuovo a ogni lettura: un `URL` conserva in cache i valori già letti (spazio libero compreso), quindi lo stesso
+        // oggetto restituirebbe sempre il valore della connessione anche dopo aver scritto o cancellato file.
+        let fresh = volumeRoot.map { URL(fileURLWithPath: $0.path) }
+        let values = try? fresh?.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityKey])
         return MTPStorage(id: Self.volumeStorageID,
                           name: volumeName.isEmpty ? t("label_storage") : volumeName,
                           capacity: UInt64(max(0, values?.volumeTotalCapacity ?? 0)),

@@ -41,6 +41,8 @@ struct MiniPlayerView: View {
     var queuePosition: Int = 0
     var isShuffle: Binding<Bool> = .constant(false)
     var isRepeat: Binding<Bool> = .constant(false)
+    /// Anteprima: 15 s da circa il 30 % di ogni brano (in ogni pannello del player).
+    var isPreview: Binding<Bool> = .constant(false)
     var onJump: (Int) -> Void = { _ in }
     /// Menu del tasto destro sulla copertina (brano in ascolto): «Invia a Custom» e «Invia all'orologio»,
     /// con le stesse icone dei pulsanti in fondo al pannello. nil = voce assente; `canSendToWatch` false = voce non attiva.
@@ -63,6 +65,8 @@ struct MiniPlayerView: View {
     var artworkRevision: Int = 0
     var isOnDevice: Bool = false
     var isInPlaylist: Bool = false
+    /// Riproduzione dalla Custom Playlist: dettagli della riga (numero, tempo progressivo, km PacePro…), al posto dell'icona «in playlist».
+    var customInfo: CustomPlayInfo? = nil
     let height: CGFloat
 
     @State private var showQueue = false
@@ -157,6 +161,12 @@ struct MiniPlayerView: View {
                                 }
                                 .help(t("tooltip_player_repeat"))
                             }
+
+                            Button { isPreview.wrappedValue.toggle() } label: {
+                                Image(systemName: "timer")
+                                    .foregroundStyle(isPreview.wrappedValue ? Color.accentColor : .secondary)
+                            }
+                            .help(t("tooltip_player_preview"))
                         }
                         .buttonStyle(.borderless)
                         .fixedSize()
@@ -260,6 +270,7 @@ struct MiniPlayerView: View {
             }
         } else {
             HStack(spacing: 1) {
+                if let c = customInfo, c.trackID == track.id { customChips(c).padding(.trailing, 6) }
                 Group {
                     if track.isPurchased {
                         Image(systemName: "bag").foregroundStyle(Color.statusNeutral).help(t("purchased_track_help"))
@@ -285,6 +296,48 @@ struct MiniPlayerView: View {
                 .font(.system(size: 14)).frame(width: 20)
             }
         }
+    }
+
+    /// Dettagli della riga nella Custom Playlist, come nell'elenco: numero, «Metà», traguardo, «km N», km di partenza, tempo progressivo.
+    private func customChips(_ c: CustomPlayInfo) -> some View {
+        // Colonne a larghezza fissa, allineate a destra come le icone di stato: restano ferme da un brano all'altro.
+        HStack(spacing: 4) {
+            Group {
+                if c.isMid {
+                    Text(t("custom_mid_badge"))
+                        .font(.caption.weight(.semibold)).foregroundStyle(Color.orange)
+                        .padding(.horizontal, 6).frame(height: 16)
+                        .background(Color.orange.opacity(0.18), in: Capsule())
+                }
+            }.frame(width: 40, alignment: .trailing)
+            Group {
+                if c.finish {
+                    Image(systemName: "flag.checkered").font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.green)
+                }
+            }.frame(width: 20, alignment: .center)
+            Group {
+                if let first = c.crossings.first, let last = c.crossings.last {
+                    Text(first == last ? "km \(first)" : "km \(first)–\(last)")
+                        .font(.caption.weight(.semibold).monospacedDigit()).foregroundStyle(Color.teal)
+                        .padding(.horizontal, 6).frame(height: 16)
+                        .background(Color.teal.opacity(0.18), in: Capsule())
+                }
+            }.frame(width: 62, alignment: .trailing)
+            Group {
+                if let km = c.kmStart, !km.isEmpty {
+                    Text(km.contains("km") || km == "—" ? km : km + " km")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }.frame(width: 52, alignment: .trailing)
+            Group {
+                if let r = c.rolling {
+                    Text(r).font(.caption.monospacedDigit()).foregroundStyle(AppSettings.shared.selectionSolidColor)
+                }
+            }.frame(width: 46, alignment: .trailing)
+        }
+        .lineLimit(1)
+        .fixedSize()
+        .help(c.help)
     }
 
     /// Icona playlist + nome (cliccabile): apre il balloon con i brani già riprodotti, quello in

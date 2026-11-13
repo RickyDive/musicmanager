@@ -4,7 +4,7 @@
 
 A macOS app that transfers music, albums and playlists from the **Music** app library to a **Garmin** watch (Fenix, Forerunner, Edge…) over USB (MTP), and manages what is on the watch.
 
-> **Version 2.3.** Feedback is welcome: open an [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
+> **Version 2.5.** Feedback is welcome: open an [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
 > Independent project, not affiliated with or endorsed by Garmin or Apple.
 
 > **Scope:** music flows one way, from your Mac library to the device. The app never copies audio from a device and does not access other devices' libraries. See [docs/SCOPE.md](docs/SCOPE.md).
@@ -52,6 +52,16 @@ To build the DMG: `Scripts/build-release.sh` (see [docs/RELEASING.md](docs/RELEA
 
 ## Privacy
 The app sends no data to servers of its own. Optional feature (off by default): the software update check asks Garmin's servers whether a new version exists, sending the contents of `GarminDevice.xml` through an undocumented service.
+
+## What is new in 2.5
+- **MusicManager Server**: read a Music library from another Mac through a compact `library.json`, no XML to export by hand (macOS 12 or later on the server side).
+- **Podcasts**: send the episodes you already downloaded in Apple Podcasts to the watch (MP3 only; nothing is downloaded).
+- **Fix Artwork**: the online search goes through the artist's whole discography, offers every edition of an album and ignores «The» / «Best Of» differences; the «songs without cover» filter is faster and never leaves an empty list.
+- **Custom Playlist**: PacePro (km per song) with up to 12 splits.
+- **Interface**: preview mode in the mini player, Albums quick switch (alphabetical / date added), one «External Sources» table, pill-shaped device bar, redesigned welcome window, experimental user profiles.
+- **Direct Copy**: a prompt before duplicating files already in the playlist.
+
+Release text: [docs/RELEASE-NOTES-2.5.md](docs/RELEASE-NOTES-2.5.md).
 
 ## What is new in 2.3
 - **Speed with very large libraries**: measured on a 55,000-song network library, freezes of 1–15 s on clicks became mostly under 1 s, memory stays around 400–700 MB instead of reaching 1.6 GB, and typing to jump in a list went from 7–15 s to 0.01–0.2 s. A *Detailed log* option in Settings records timings for diagnostics.

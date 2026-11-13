@@ -4,7 +4,7 @@
 
 App per macOS che trasferisce musica, album e playlist dalla libreria dell'app **Musica** a un orologio **Garmin** (Fenix, Forerunner, Edge…) via USB (MTP), e ne gestisce il contenuto.
 
-> **Versione 2.3.** Il feedback è benvenuto: apri una [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
+> **Versione 2.5.** Il feedback è benvenuto: apri una [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
 > Progetto indipendente, non affiliato né approvato da Garmin o Apple.
 
 > **Ambito:** la musica va in un solo senso, dalla libreria del Mac al dispositivo. L'app non copia mai audio da un dispositivo e non accede alle librerie di altri dispositivi. Vedi [docs/SCOPE.md](docs/SCOPE.md).
@@ -51,6 +51,16 @@ Per creare il DMG: `Scripts/build-release.sh` (vedi [docs/RELEASING.md](docs/REL
 
 ## Note sulla privacy
 L'app non invia dati a server propri. Funzione opzionale (spenta di default): il controllo aggiornamenti software chiede ai server Garmin se esiste una nuova versione, inviando il contenuto di `GarminDevice.xml` tramite un servizio non documentato.
+
+## Novità della 2.5
+- **MusicManager Server**: legge la libreria di Musica di un altro Mac tramite un `library.json` compatto, senza esportare a mano un XML (macOS 12 o successivo sul lato server).
+- **Podcast**: invia sull'orologio gli episodi già scaricati in Apple Podcasts (solo MP3; non scarica nulla).
+- **Fix Artwork**: la ricerca online percorre l'intera discografia dell'artista, propone ogni edizione di un album e ignora le differenze «The» / «Best Of»; il filtro «brani senza copertina» è più veloce e non lascia mai l'elenco vuoto.
+- **Custom Playlist**: PacePro (km per brano) con fino a 12 frazioni.
+- **Interfaccia**: modalità anteprima nel mini player, cambio rapido degli Album (alfabetico / data di aggiunta), un'unica tabella «Sorgenti Esterne», barra del dispositivo a pillola, finestra di benvenuto ridisegnata, profili utente sperimentali.
+- **Direct Copy**: avviso prima di duplicare file già presenti nella playlist.
+
+Testo del rilascio: [docs/RELEASE-NOTES-2.5.md](docs/RELEASE-NOTES-2.5.md).
 
 ## Novità della 2.3
 - **Velocità con librerie molto grandi**: misurato su una libreria di rete da 55.000 brani, i blocchi di 1–15 s sui clic sono diventati per lo più sotto il secondo, la memoria resta intorno a 400–700 MB invece di arrivare a 1,6 GB, e la digitazione per posizionarsi in un elenco è passata da 7–15 s a 0,01–0,2 s. Un'opzione *Registro dettagliato* nelle Impostazioni registra i tempi per la diagnostica.

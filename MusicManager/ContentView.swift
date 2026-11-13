@@ -21,14 +21,20 @@ import AVFoundation
 
 struct ContentView: View {
     @StateObject private var vm = AppViewModel()
+    @ObservedObject private var users = UserProfiles.shared
     @ObservedObject private var loc = LocalizationManager.shared
     /// Osservata perché la voce "Fix Artwork" del menu contestuale compare solo con la funzione
     /// attiva in Impostazioni, e deve apparire/sparire non appena la si accende o spegne.
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var reach = LibraryReachability.shared
+    @ObservedObject private var driveRoots = DriveRootCache.shared
+    @ObservedObject private var customPlayInfo = CustomPlayInfoStore.shared
     @ObservedObject private var remoteLoader = RemoteLibraryManager.shared
     @State private var confirmDelete = false
     @State private var showDeleteSheet = false
+    /// Scheda Podcast del pannello del dispositivo (2.4 Internal): stato dell'elenco di Apple Podcasts e scheda scelta.
+    @StateObject private var podcast = PodcastModel()
+    @State private var showPodcast = false
     /// 2.1 Beta 3 (diagnostica): navigatore dei file del dispositivo, sola lettura.
     @State private var showDeviceFiles = false
     /// Trascinamento di file audio (da Finder, non da Music) sul pannello del dispositivo.
@@ -37,7 +43,6 @@ struct ContentView: View {
     @State private var importPanel: DroppedImportPayload?
     @State private var confirmEmptyMusic = false
     /// Messaggio di benvenuto: una sola volta per installazione (chi aveva già visto quello delle beta non lo rivede).
-    @State private var showWelcome = false
     /// Finestra a schermo intero (aggiornata dalle notifiche della finestra): serve allo sfondo, vedi `containerBackground`.
     @State private var isFullScreen = false
     // Centro notifiche (campanella nella barra del titolo)
@@ -82,14 +87,14 @@ struct ContentView: View {
                     musicPane
                         .frame(width: half)
                         .clipped()
-                        .simultaneousGesture(TapGesture().onEnded { vm.searchTarget = .music })
+                        .simultaneousGesture(TapGesture().onEnded { if vm.searchTarget != .music { vm.searchTarget = .music } })
                     // Prova: nessuna linea di divisione tra i due pannelli (resta 1 pt di spazio, cosi le
                     // larghezze non cambiano). Per rimetterla: `Divider()` al posto di `Color.clear`.
                     Color.clear.frame(width: 1)
                     devicePane
                         .frame(width: geo.size.width - 1 - half)
                         .clipped()
-                        .simultaneousGesture(TapGesture().onEnded { vm.searchTarget = .device })
+                        .simultaneousGesture(TapGesture().onEnded { if vm.searchTarget != .device { vm.searchTarget = .device } })
                 }
             }
         }
@@ -235,13 +240,18 @@ struct ContentView: View {
         .task { await vm.connectIfDeviceAlreadyPresent() }
         .onAppear {
             let seen = UserDefaults.standard.bool(forKey: "welcome_seen_2_1") || UserDefaults.standard.bool(forKey: "welcome_seen_2_1_beta1")
-            if !seen { showWelcome = true }
+            if !seen {
+                // Benvenuto nel pannello di vetro (come le altre finestre di conferma), poco dopo la comparsa della finestra principale.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    onNextRunLoop {
+                        var hideNextTime = true
+                        GlassModalPresenter.run { close in WelcomeView { hideNextTime = $0; close() } }
+                        if hideNextTime { UserDefaults.standard.set(true, forKey: "welcome_seen_2_1") }
+                    }
+                }
+            }
         }
-        .alert(t("welcome_title"), isPresented: $showWelcome) {
-            Button(t("button_ok")) { UserDefaults.standard.set(true, forKey: "welcome_seen_2_1") }
-        } message: {
-            Text(t("welcome_message"))
-        }
+        .modifier(DeviceOwnerPromptModifier(vm: vm))   // 2.4: dispositivo di un altro utente (profili utente)
         // Brani di una libreria condivisa senza copertina da inviare: propone la ricerca online.
         .alert(t("artwork_proposal_title"), isPresented: Binding(
             get: { vm.artworkProposal != nil },
@@ -485,6 +495,7 @@ struct ContentView: View {
                            artworkRevision: vm.artworkRevision,
                            artworkProvider: vm.appleArtwork,
                            artworkOriginProvider: vm.artworkOrigin,
+                           artworkOriginConfirmProvider: vm.artworkOriginFull,
                            onPlay: { track, queue, source in vm.play(track, queue: queue, source: source) },
                            playingTrackID: vm.playerTrack?.id,
                            player: vm.player,
@@ -493,6 +504,7 @@ struct ContentView: View {
                            customPlaylist: vm.customPlaylistConfig)
         .externalReveal($vm.externalReveal)
         .genreFilter()
+        .albumOrderSwitch()
         .typeAheadFirstLetterOnly(vm.externalLibraryName != nil)   // librerie remote / unità esterne: solo la prima lettera
         .artistThumbnailDownload(vm.externalLibraryName == nil)   // miniature artisti: ricerca online solo con la libreria locale
         .toolbarSearch($vm.musicSearch, custom: $vm.customPlaylistSearch)
@@ -501,7 +513,7 @@ struct ContentView: View {
         .wholePlaylistSelection { vm.wholePlaylistSelectionID = $0 }
         .onSelectedPlaylistsChange { vm.selectedApplePlaylistIDs = $0 }
         .onPlaylistCompletedBySongs { vm.status = "ℹ️ " + t("status_playlist_completed_by_songs", $0) }
-        .onDeviceCheck { vm.isOnDevice($0) }
+        .onDeviceCheck(revision: vm.deviceIndexRevision) { vm.isOnDevice($0) }
         .onPlaylistMembership { vm.playlistsContaining($0) }
         .onPlaylistDeviceCheck { vm.isPlaylistOnDevice($0) }
         .topAccessory {
@@ -535,6 +547,7 @@ struct ContentView: View {
                                            queuePosition: vm.playOrderPos,
                                            isShuffle: $vm.isShuffleOn,
                                            isRepeat: $vm.isRepeatOn,
+                                           isPreview: $vm.isPreviewOn,
                                            onJump: { vm.jumpToQueuePosition($0) },
                                            onSendToCustom: { if let tr = vm.playerTrack { vm.addTracksToCustomPlaylist([tr]) } },
                                            onSendToWatch: { if let tr = vm.playerTrack { Task { await vm.sendTracksToDevice([tr]) } } },
@@ -550,7 +563,9 @@ struct ContentView: View {
                                            originProvider: { await vm.artworkOrigin(for: $0) },
                                            artworkRevision: vm.artworkRevision,
                                            isOnDevice: vm.playerTrack.map { vm.isOnDevice($0) } ?? false,
-                                           isInPlaylist: vm.playerTrack.map { !vm.playlistsContaining($0).isEmpty } ?? false,
+                                           isInPlaylist: vm.playbackSource?.category == .customPlaylist
+                                               ? false : (vm.playerTrack.map { !vm.playlistsContaining($0).isEmpty } ?? false),
+                                           customInfo: vm.playbackSource?.category == .customPlaylist ? customPlayInfo.info : nil,
                                            height: topReservedHeight)
             }
         }
@@ -563,72 +578,93 @@ struct ContentView: View {
             // (vedi `glassBars`), quindi la larghezza del pannello non cambia passando da una libreria all'altra.
             let canEject = vm.isDriveLibraryActive && vm.driveLibraryVolumeURL != nil
             if canEject {
-                Button { Task { await vm.ejectDriveLibrary() } } label: { accessoryIcon("eject.fill") }
-                    .buttonStyle(.flat)
-                    .disabled(vm.isBusy)
-                    .help(t("drive_eject_help"))
+                pillBackground {
+                    pillButton("eject.fill", help: t("drive_eject_help"), disabled: vm.isBusy) { Task { await vm.ejectDriveLibrary() } }
+                }
             }
-            Menu {
-                // Le voci usano l'inizializzatore con `systemImage` e lo stile «titolo + icona»: con un `Label` dentro
-                // la chiusura dell'etichetta, i menu di macOS mostravano solo il testo.
-                Button((vm.externalLibraryName != nil ? "" : "✓ ") + t("library_local"),
-                       systemImage: "laptopcomputer") {
-                    Task { await vm.showLocalLibrary() }
+            // 2.4 Internal: pillola come il selettore della memoria e i controlli della Custom Playlist (icona + nome + freccia
+            // disegnati da noi, menu trasparente sopra). Larghezza fissa: il pulsante non si allarga né si stringe cambiando sorgente;
+            // una sola riga, con «…» se il nome è più lungo.
+            HStack(spacing: 2) {
+                HStack(spacing: 4) {
+                    Label(shortLibraryName(vm.externalLibraryName ?? t("library_local")),
+                          systemImage: vm.externalLibraryName == nil ? "laptopcomputer"
+                              : vm.isDriveLibraryActive ? "externaldrive"
+                              : (settings.remoteLibraries.first { $0.id == vm.externalLibraryID }
+                                    .map { vm.locality(of: $0) == .remote } == true
+                                 ? "network" : "externaldrive.connected.to.line.below"))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .labelStyle(CompactAwareLabelStyle())
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.secondary)
                 }
-                .labelStyle(.titleAndIcon)
-                Divider()
-                let remotes = settings.remoteLibraries.filter(\.isUsable)
-                if remotes.isEmpty && settings.driveLibraries.isEmpty {
-                    Text(t("library_none_found"))
-                }
-                ForEach(remotes) { cfg in
-                    let isRemote = vm.locality(of: cfg) == .remote
-                    let unreachable = reach.isUnreachable(cfg.id)
-                    // Server non raggiungibile: icona «network.slash» e voce non selezionabile. Altra rete (raggiungibile,
-                    // es. via VPN): mondo e avviso alla scelta. Rete locale: drive di rete.
-                    Button((vm.externalLibraryID == cfg.id ? "✓ " : "") + cfg.nickname
-                           + (unreachable ? " — " + t("library_unreachable")
-                              : (isRemote ? " — " + t("library_other_network") : "")),
-                           systemImage: unreachable ? "network.slash"
-                               : (isRemote ? "network" : "externaldrive.connected.to.line.below")) {
-                        Task { await vm.requestRemoteLibrary(cfg) }
-                    }
-                    .labelStyle(.titleAndIcon)
-                    .foregroundStyle(unreachable ? Color.red : Color.primary)
-                    .disabled(unreachable)
-                }
-                // Librerie «Unità esterna» (cartella di file audio con indice proprio).
-                let drives = settings.driveLibraries.filter { !$0.nickname.isEmpty }
-                if !drives.isEmpty {
-                    Divider()
-                    ForEach(drives) { cfg in
-                        let available = DriveLibraryService.rootURL(cfg) != nil
-                        Button((vm.externalLibraryID == cfg.id ? "✓ " : "") + cfg.nickname
-                               + (available ? "" : " — " + t("library_unavailable")),
-                               systemImage: available ? "externaldrive" : "externaldrive.badge.xmark") {
-                            // Scansione incrementale a ogni apertura: i file aggiunti o tolti sul drive compaiono subito (solo i file nuovi si rileggono).
-                            Task { await vm.selectDriveLibrary(cfg, rescan: true) }
+                .padding(.horizontal, 8)
+                .frame(minWidth: compactPane ? nil : 84, idealWidth: compactPane ? nil : 120,
+                       maxWidth: compactPane ? nil : 120, minHeight: 24, maxHeight: 24, alignment: .leading)
+                .overlay {
+                    Menu {
+                        // Le voci usano l'inizializzatore con `systemImage` e lo stile «titolo + icona»: con un `Label` dentro
+                        // la chiusura dell'etichetta, i menu di macOS mostravano solo il testo.
+                        Button((vm.externalLibraryName != nil ? "" : "✓ ") + t("library_local"),
+                               systemImage: "laptopcomputer") {
+                            Task { await vm.showLocalLibrary() }
                         }
                         .labelStyle(.titleAndIcon)
-                        .foregroundStyle(available ? Color.primary : Color.red)
-                        .disabled(!available)
+                        Divider()
+                        let remotes = settings.remoteLibraries.filter(\.isUsable)
+                        if remotes.isEmpty && settings.driveLibraries.isEmpty {
+                            Text(t("library_none_found"))
+                        }
+                        ForEach(remotes) { cfg in
+                            let isRemote = vm.locality(of: cfg) == .remote
+                            let unreachable = reach.isUnreachable(cfg.id)
+                            // Server non raggiungibile: icona «network.slash» e voce non selezionabile. Altra rete (raggiungibile,
+                            // es. via VPN): mondo e avviso alla scelta. Rete locale: drive di rete.
+                            Button((vm.externalLibraryID == cfg.id ? "✓ " : "") + cfg.nickname
+                                   + (unreachable ? " — " + t("library_unreachable")
+                                      : (isRemote ? " — " + t("library_other_network") : "")),
+                                   systemImage: unreachable ? "network.slash"
+                                       : (isRemote ? "network" : "externaldrive.connected.to.line.below")) {
+                                Task { await vm.requestRemoteLibrary(cfg) }
+                            }
+                            .labelStyle(.titleAndIcon)
+                            .foregroundStyle(unreachable ? Color.red : Color.primary)
+                            .disabled(unreachable)
+                        }
+                        // Librerie «Unità esterna» (cartella di file audio con indice proprio).
+                        let drives = settings.driveLibraries.filter { !$0.nickname.isEmpty }
+                        if !drives.isEmpty {
+                            Divider()
+                            ForEach(drives) { cfg in
+                                let available = DriveRootCache.shared.root(cfg) != nil
+                                Button((vm.externalLibraryID == cfg.id ? "✓ " : "") + cfg.nickname
+                                       + (available ? "" : " — " + t("library_unavailable")),
+                                       systemImage: available ? "externaldrive" : "externaldrive.badge.xmark") {
+                                    // Scansione incrementale a ogni apertura: i file aggiunti o tolti sul drive compaiono subito (solo i file nuovi si rileggono).
+                                    Task { await vm.selectDriveLibrary(cfg, rescan: true) }
+                                }
+                                .labelStyle(.titleAndIcon)
+                                .foregroundStyle(available ? Color.primary : Color.red)
+                                .disabled(!available)
+                            }
+                        }
+                    } label: {
+                        Color.clear.contentShape(Rectangle())
                     }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
                 }
-            } label: {
-                Label(shortLibraryName(vm.externalLibraryName ?? t("library_local")),
-                      systemImage: vm.externalLibraryName == nil ? "laptopcomputer"
-                          : vm.isDriveLibraryActive ? "externaldrive"
-                          : (settings.remoteLibraries.first { $0.id == vm.externalLibraryID }
-                                .map { vm.locality(of: $0) == .remote } == true
-                             ? "network" : "externaldrive.connected.to.line.below"))
-                // Larghezza fissa: il pulsante non si allarga né si stringe cambiando sorgente. Una sola riga: se il nome
-                // è più lungo si taglia con «…».
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .labelStyle(CompactAwareLabelStyle())
-                .frame(width: compactPane ? nil : 104, alignment: .leading)
             }
-            .menuStyle(.button)
+            .padding(2)
+            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+            .fixedSize()
+            .opacity(vm.isBusy ? 0.4 : 1)
             .disabled(vm.isBusy)
             .help(t("library_menu_help"))
             }
@@ -821,16 +857,22 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             if vm.isSelectedStorageInternal, let s = device.storages.first(where: { $0.id == vm.selectedStorageID }) {
                                 StorageBarView(total: s.capacity, garmin: vm.garminFolderSize, maps: vm.mapsSize,
-                                               services: vm.servicesSize, music: vm.musicFolderSize, free: s.free, pending: vm.pendingTransferBytes,
+                                               services: vm.servicesSize, music: vm.musicFolderSize, podcasts: vm.podcastsFolderSize, free: s.free, pending: vm.pendingTransferBytes,
                                                isLoading: vm.isLoadingStorageBreakdown, unsupported: vm.isDeviceReadOnly)
                                 // Filo sottilissimo, del colore dei testi, tra la legenda e i conteggi; largo come la barra.
                                 // Senza musica (dispositivo non supportato) né il filo né i conteggi.
-                                if !vm.isDeviceReadOnly { Rectangle().fill(Color.secondary).frame(height: 0.5) }
+                                // Dispositivo di un altro utente (profili): filo e conteggi restano nel layout ma invisibili, così
+                                // la barra della memoria non si sposta.
+                                if !vm.isDeviceReadOnly || vm.deviceLockedByUser != nil {
+                                    Rectangle().fill(Color.secondary).frame(height: 0.5)
+                                        .opacity(vm.deviceLockedByUser == nil ? 1 : 0)
+                                }
                             }
-                            if !vm.isDeviceReadOnly {
+                            if !vm.isDeviceReadOnly || vm.deviceLockedByUser != nil {
                                 Text(deviceCountsText)
                                     .font(.caption).foregroundStyle(StorageBarView.textColor)
                                     .lineLimit(1).minimumScaleFactor(0.8)
+                                    .opacity(vm.deviceLockedByUser == nil ? 1 : 0)
                             }
                         }
                     }
@@ -859,7 +901,7 @@ struct ContentView: View {
                     updateCapsule(t("device_no_music_capsule"), color: Color(red: 0.937, green: 0.604, blue: 0.604))
                         .help(t("tooltip_device_not_music_capable"))
                 }
-                if vm.volumeMapsAvailable {
+                if vm.volumeMapsAvailable, settings.checkDeviceUpdates {
                     Button { Task { await vm.ensureVolumeMaps(); showMapsSheet = true } } label: {
                         Image(systemName: "map.circle.fill").font(.system(size: 14))
                             .symbolRenderingMode(.palette)
@@ -871,8 +913,9 @@ struct ContentView: View {
                     routesOnlyIcon
                 }
             }
-            softwareVersionLine(formattedSoftwareVersion(volume.info.softwareVersion), status: vm.volumeSoftwareStatus)
-            infoLine("Serial Number", vm.volumeSerial, copyable: true)
+            softwareVersionLine(formattedSoftwareVersion(volume.info.softwareVersion), deviceID: volume.info.id,
+                                status: settings.checkDeviceUpdates ? vm.volumeSoftwareStatus : nil)
+            serialProductLine(vm.volumeSerial, vm.volumeProductNumber)
             infoLine("Volume", t("volume_space", volume.name, free, total))
             infoLine("Storage Capacity", total)
             Spacer(minLength: 4)
@@ -926,7 +969,7 @@ struct ContentView: View {
             HStack(spacing: 6) {
                 infoLine("Model", vm.deviceModelText)
                 // Garmin ha restituito le informazioni sulle mappe del dispositivo: icona del mondo.
-                if vm.deviceMapsAvailable {
+                if vm.deviceMapsAvailable, settings.checkDeviceUpdates {
                     Button { Task { await vm.ensureDeviceMaps(); showMapsSheet = true } } label: {
                         Image(systemName: "map.circle.fill").font(.system(size: 14))
                             .symbolRenderingMode(.palette)
@@ -938,13 +981,20 @@ struct ContentView: View {
                     routesOnlyIcon
                 }
                 // Dispositivo senza musica (da GarminDevice.xml): invio e cancellazione sono disattivati.
-                if vm.isDeviceReadOnly {
+                if let owner = vm.deviceLockedByUser {
+                    updateCapsule(t("device_other_user_capsule"), color: Color(red: 0.937, green: 0.604, blue: 0.604))
+                        .help(t("tooltip_device_other_user", owner))
+                } else if vm.isDeviceReadOnly {
                     updateCapsule(t("device_no_music_capsule"), color: Color(red: 0.937, green: 0.604, blue: 0.604))
                         .help(t("tooltip_device_not_music_capable"))
                 }
             }
-            softwareVersionLine(formattedSoftwareVersion(info?.softwareVersion), status: vm.softwareUpdateStatus)
-            infoLine("Serial Number", vm.deviceSerial, copyable: true)
+            // 2.4 Internal: altezza fissa della riga «Model». Con il controllo aggiornamenti attivo la riga contiene l'icona della
+            // mappa (14 pt), più alta del testo: senza altezza fissa le righe seguenti si spostavano di qualche punto cambiando utente.
+            .frame(height: 17)
+            softwareVersionLine(formattedSoftwareVersion(info?.softwareVersion), deviceID: vm.deviceXMLInfo?.id,
+                                status: settings.checkDeviceUpdates ? vm.softwareUpdateStatus : nil)
+            serialProductLine(vm.deviceSerial, vm.deviceProductNumber)
             infoLine("Storage Capacity", internalStorageCapacityText)
         }
         .font(.caption)
@@ -953,22 +1003,43 @@ struct ContentView: View {
 
     /// «Software Version: 6.49» seguito, se il controllo opzionale ha dato un esito, da una capsula piena con testo nero
     /// (stesso stile di «Hi-Res»): verde «Software Updated» oppure arancione «Upgrade Available».
-    private func softwareVersionLine(_ value: String?, status: SoftwareUpdateStatus?) -> some View {
+    private func softwareVersionLine(_ value: String?, deviceID: String?, status: SoftwareUpdateStatus?) -> some View {
         HStack(spacing: 6) {
             Text("Software Version:").foregroundStyle(StorageBarView.textColor)
             Text(value ?? "—").lineLimit(1).truncationMode(.middle).textSelection(.disabled)
+            // 2.4 Internal: versione installata arrivata dal canale Garmin Beta (il server l'aveva proposta come `public_beta`).
+            if settings.checkDeviceUpdates,
+               settings.releaseChannel(forDevice: deviceID, version: value)?.contains("beta") == true {
+                updateCapsule("Beta", color: Color(red: 0.70, green: 0.78, blue: 0.88))   // azzurro pallido, testo nero come le altre capsule
+                    .help(t("tooltip_release_beta"))
+            }
             switch status {
             case .upToDate:
-                updateCapsule("Software Updated", color: Color(red: 0.62, green: 0.84, blue: 0.62)) // verde pallido
-                    .help(t("tooltip_software_updated"))
+                UpdateNotesCapsule(text: "Software Updated", color: Color(red: 0.62, green: 0.84, blue: 0.62), // verde pallido
+                                   title: value.map { t("tooltip_installed_whats_new", $0) } ?? "",
+                                   notes: value.flatMap { v in deviceID.flatMap { DeviceXMLStore.updateNotes(version: v, forDevice: $0) } },
+                                   tooltip: upToDateTooltip(version: value, deviceID: deviceID),
+                                   deviceID: deviceID, shownVersion: value, includeBeta: settings.isBetaEnrolled(forDevice: deviceID))
             case .available(let version, let notes):
                 // 2.3 Beta 2: la versione disponibile è scritta nella capsula (quella installata è a sinistra), non solo nel tooltip.
-                updateCapsule("Upgrade Available: \(version)", color: Color(red: 0.937, green: 0.604, blue: 0.604)) // rosso pallido #EF9A9A
-                    .help([t("tooltip_update_available", version), notes].compactMap { $0 }.joined(separator: "\n\n"))
+                let shownNotes = notes ?? deviceID.flatMap { DeviceXMLStore.updateNotes(version: version, forDevice: $0) }
+                UpdateNotesCapsule(text: "Upgrade Available: \(version)", color: Color(red: 0.937, green: 0.604, blue: 0.604), // rosso pallido #EF9A9A
+                                   title: t("tooltip_update_available", version),
+                                   notes: shownNotes,
+                                   tooltip: [t("tooltip_update_available", version), shownNotes].compactMap { $0 }.joined(separator: "\n\n"),
+                                   deviceID: deviceID, shownVersion: version, includeBeta: settings.isBetaEnrolled(forDevice: deviceID))
             case nil:
                 EmptyView()
             }
         }
+    }
+
+    /// Tooltip di «Software Updated»: se Garmin aveva dato le novità di questa versione quando era un aggiornamento disponibile,
+    /// si rivedono qui (file UpdateNotes.json del dispositivo).
+    private func upToDateTooltip(version: String?, deviceID: String?) -> String {
+        let base = t("tooltip_software_updated")
+        guard let version, let deviceID, let notes = DeviceXMLStore.updateNotes(version: version, forDevice: deviceID) else { return base }
+        return base + "\n\n" + t("tooltip_installed_whats_new", version) + "\n" + notes
     }
 
     /// Dispositivo senza mappe ma che accetta percorsi (es. Forerunner 255): icona informativa, non cliccabile.
@@ -985,6 +1056,15 @@ struct ContentView: View {
 
     private func updateCapsule(_ text: String, color: Color) -> some View {
         UpdateCapsuleView(text: text, color: color)
+    }
+
+    /// «Serial Number» e «Product Number» (codice commerciale della variante) sulla stessa riga, in due colonne fisse: il secondo
+    /// campo parte sempre dalla stessa posizione, qualunque sia la lunghezza del numero di serie.
+    private func serialProductLine(_ serial: String?, _ product: String?) -> some View {
+        HStack(spacing: 0) {
+            infoLine("Serial Number", serial, copyable: true).frame(width: 170, alignment: .leading)
+            infoLine("Product Number", product, copyable: true)
+        }
     }
 
     private func infoLine(_ label: String, _ value: String?, copyable: Bool = false) -> some View {
@@ -1017,63 +1097,101 @@ struct ContentView: View {
         name.lowercased().contains("sd") ? "sdcard" : "internaldrive"
     }
 
-    private func accessoryIcon(_ name: String) -> some View {
-        Image(systemName: name).frame(width: 20, height: 16)
+    /// Pulsanti a destra delle schede (2.4 Internal): stessa pillola dei controlli della Custom Playlist
+    /// (`CatalogBrowser.artistFirstSwitch`): fondo tenue arrotondato (8 pt) con segmenti icona 30 x 24 pt.
+    private func pillButton(_ symbol: String, help: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .frame(width: 30, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
+        .help(help)
+    }
+
+    private func pillBackground<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: 2) { content() }
+            .padding(2)
+            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+            .fixedSize()
     }
 
     /// A destra della riga delle schede del dispositivo (come il selettore libreria in Music): Eject, Connetti/Disconnetti
-    /// e, con più memorie, il selettore della memoria. Ordine (2.3 Beta 2): Eject · selettore memoria · Connetti/Disconnetti (il più a destra).
+    /// e, con più memorie, il selettore della memoria. Ordine (2.4 Internal): selettore memoria · Eject · Connetti/Disconnetti (il più a destra); Eject e Connetti/Disconnetti stanno nella stessa pillola, come i controlli della Custom Playlist.
     /// - Eject: compare solo con l'opzione «Musica su dischi esterni e schede SD» accesa e un disco rilevato, non connesso.
     /// - Connetti / Disconnetti: cavo / cavo barrato.
     private var deviceCategoryControls: some View {
         HStack(spacing: 6) {
             let volume = vm.device == nil ? vm.volumeDevices.first : nil
-            // Espelli (2.3 Beta 2): solo con «Musica su dischi esterni e schede SD» acceso e un disco rilevato (non connesso).
-            if settings.manageMusicOnVolumes, let volume {
-                Button { vm.ejectVolume(volume) } label: { accessoryIcon("eject.fill") }
-                    .disabled(vm.isBusy)
-                    .help(t("tooltip_eject_disk"))
-            }
-            // Regola 2.0.1: il selettore compare solo se il dispositivo ha più di una memoria.
+            // Regola 2.0.1: il selettore compare solo se il dispositivo ha più di una memoria. Pillola come il filtro genere:
+            // etichetta (icona + nome) disegnata da noi e menu trasparente sopra.
             if let device = vm.device, device.storages.count > 1 {
-                // Stesso aspetto del selettore della libreria in Music: pulsante a menu, icona + nome, larghezza fissa.
                 let current = device.storages.first { $0.id == vm.selectedStorageID }
-                Menu {
-                    ForEach(device.storages) { s in
-                        Button((s.id == vm.selectedStorageID ? "✓ " : "") + storageDisplayName(s.name),
-                               systemImage: storageIconName(s.name)) {
-                            Task { await vm.changeStorage(to: s.id) }
-                        }
-                        .labelStyle(.titleAndIcon)
+                HStack(spacing: 2) {
+                    HStack(spacing: 4) {
+                        Label(current.map { storageDisplayName($0.name) } ?? t("label_storage"),
+                              systemImage: storageIconName(current?.name ?? ""))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .labelStyle(CompactAwareLabelStyle())
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(.secondary)
                     }
-                } label: {
-                    Label(current.map { storageDisplayName($0.name) } ?? t("label_storage"),
-                          systemImage: storageIconName(current?.name ?? ""))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .labelStyle(CompactAwareLabelStyle())
-                        .frame(width: compactPane ? nil : 130, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .frame(width: compactPane ? nil : 130, height: 24, alignment: .leading)
+                    .overlay {
+                        Menu {
+                            ForEach(device.storages) { s in
+                                Button((s.id == vm.selectedStorageID ? "✓ " : "") + storageDisplayName(s.name),
+                                       systemImage: storageIconName(s.name)) {
+                                    Task { await vm.changeStorage(to: s.id) }
+                                }
+                                .labelStyle(.titleAndIcon)
+                            }
+                        } label: {
+                            Color.clear.contentShape(Rectangle())
+                        }
+                        .menuStyle(.button)
+                        .buttonStyle(.plain)
+                        .menuIndicator(.hidden)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                    }
                 }
-                .menuStyle(.button)
+                .padding(2)
+                .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+                .fixedSize()
+                .opacity(vm.isBusy ? 0.4 : 1)
                 .disabled(vm.isBusy)
                 .help(t("tooltip_storage_menu"))
             }
-            if vm.device != nil {
-                Button { Task { await vm.disconnect() } } label: { accessoryIcon("cable.connector.slash") }
-                    .disabled(vm.isBusy)
-                    .help(t("tooltip_disconnect_device"))
-            } else if let volume {
-                // Musica su dischi e schede SD (Impostazioni ▸ Avanzate): il volume si apre come un dispositivo.
-                Button { Task { await vm.connectVolume(volume) } } label: { accessoryIcon("cable.connector") }
-                    .disabled(vm.isBusy || !(settings.manageMusicOnVolumes && volume.isMusicCapable))
-                    .help(t("tooltip_connect_device"))
-            } else {
-                Button { Task { await vm.connect() } } label: { accessoryIcon("cable.connector") }
-                    .disabled(vm.isBusy)
-                    .help(t("tooltip_connect_device"))
+            // Eject (solo con «Musica su dischi esterni e schede SD» acceso e un disco rilevato, non connesso) e
+            // Connetti / Disconnetti (cavo / cavo barrato, sempre presente) nella stessa pillola.
+            pillBackground {
+                if settings.manageMusicOnVolumes, let volume {
+                    pillButton("eject.fill", help: t("tooltip_eject_disk"), disabled: vm.isBusy) { vm.ejectVolume(volume) }
+                }
+                if vm.device != nil {
+                    pillButton("cable.connector.slash", help: t("tooltip_disconnect_device"), disabled: vm.isBusy) {
+                        Task { await vm.disconnect() }
+                    }
+                } else if let volume {
+                    // Musica su dischi e schede SD (Impostazioni ▸ Avanzate): il volume si apre come un dispositivo.
+                    pillButton("cable.connector", help: t("tooltip_connect_device"),
+                               disabled: vm.isBusy || !(settings.manageMusicOnVolumes && volume.isMusicCapable)) {
+                        Task { await vm.connectVolume(volume) }
+                    }
+                } else {
+                    pillButton("cable.connector", help: t("tooltip_connect_device"), disabled: vm.isBusy) {
+                        Task { await vm.connect() }
+                    }
+                }
             }
         }
-        .buttonStyle(.flat)
     }
 
     /// Pulsanti in fondo al pannello dispositivo (stesso pannello di vetro di quello Apple Music).
@@ -1107,6 +1225,33 @@ struct ContentView: View {
         }
     }
 
+    /// Barra in basso della scheda Podcast: deseleziona, riepilogo della selezione e invio. La rimozione dal dispositivo sta nel tasto destro.
+    private var podcastBottomBar: some View {
+        let toSend = podcast.episodesToSend
+        let summary = podcast.selectionSummary
+        return HStack {
+            Button {
+                podcast.selection = []
+            } label: { Label(t("button_clear_selection"), systemImage: "xmark.circle").labelStyle(CompactAwareLabelStyle()).frame(width: barButtonWidth) }
+            .disabled(summary.count == 0 || vm.isBusy)
+            .help(t("tooltip_clear_selection"))
+            Spacer()
+            if summary.count > 0 {
+                Text(t("podcast_selected", summary.count, ByteCountFormatter.string(fromByteCount: summary.bytes, countStyle: .file)))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button {
+                Task {
+                    await vm.sendPodcastEpisodes(toSend)
+                    podcast.selection = []
+                    podcast.reloadDevice(vm)
+                }
+            } label: { Label(t("podcast_send"), systemImage: "applewatch.and.arrow.forward").labelStyle(CompactAwareLabelStyle()).frame(width: barButtonWidth) }
+            .disabled(toSend.isEmpty || vm.isBusy || vm.device == nil || vm.isDeviceReadOnly)
+            .help(t("podcast_send_tooltip"))
+        }
+    }
+
     /// Stessa costruzione del pannello Apple Music: l'elenco è la vista principale e le barre di
     /// vetro (`topAccessory` / `bottomBar`) gli stanno sopra e sotto. Nessun `.disabled`/`.opacity`
     /// sul contenitore (creerebbero un livello che appiattisce il vetro): il blocco durante le
@@ -1115,7 +1260,7 @@ struct ContentView: View {
         deviceMusicView
             .topAccessory { deviceTopBlock }
             .categoryAccessory { deviceCategoryControls }
-            .bottomBar { deviceBottomBar }
+            .bottomBar { if showPodcast { podcastBottomBar } else { deviceBottomBar } }
             // Trascinamento di file audio dal Finder: mentre ci si passa sopra, l'elenco diventa grigio con un simbolo al
             // centro (sotto le barre alta e bassa, vedi `CatalogBrowser.dropOverlayActive`); al rilascio si apre un dialogo.
             .dropOverlay(isDropTargeted && canDropAudio)
@@ -1371,6 +1516,12 @@ struct ContentView: View {
         .onEditPlaylist { vm.editDevicePlaylistInCustom($0) }
         // Dispositivo senza musica: schede, ricerca, memoria e ricarica disattivate.
         .controlsDisabled(vm.isDeviceReadOnly)
+        // 2.4 Internal: scheda Podcast dopo il divisore «|» (Apple Podcast / Device Podcast).
+        .addExtraTab(CatalogExtraTab(title: t("podcast_tab"), iconName: "dot.radiowaves.left.and.right", isSelected: showPodcast,
+                                  select: { showPodcast = true; podcast.opened(vm: vm) },
+                                  deselect: { showPodcast = false })) {
+            PodcastPane(model: podcast, vm: vm)
+        }
         // 2.3 Beta 3: icona «il brano è in una playlist del dispositivo» (colonna vuota per gli altri brani) con balloon immediato che
         // elenca le playlist. Solo se sul dispositivo c'è almeno una playlist (altrimenti la colonna resterebbe sempre vuota).
         guard !vm.devicePlaylists.isEmpty else { return base }
@@ -1469,8 +1620,10 @@ struct ContentView: View {
                     .font(.system(size: 12))
                     .disabled(m.cancelling)
             }
+            // 2.4: profili utente (sperimentale), a destra nella capsula; non compare se l'interruttore è spento.
+            UserProfileMenu(style: .capsule)
         }
-        .padding(.horizontal, 12).padding(.vertical, 4)
+        .padding(.leading, 12).padding(.trailing, users.enabled ? 4 : 12).padding(.vertical, 4)
         .frame(maxWidth: .infinity, minHeight: Self.capsuleHeight, maxHeight: Self.capsuleHeight, alignment: .leading)   // si allarga fino ai pulsanti a destra (prova: prima maxWidth 640)
         .background(Capsule().fill(Color.primary.opacity(0.07)))
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
@@ -1489,12 +1642,25 @@ struct ContentView: View {
     }
 
     /// Aggiorna (libreria e, se connesso, dispositivo): durante un'operazione mostra la rotellina.
-    private var refreshButton: some View {
+    /// Con la libreria remota cambiata sul server (`remoteUpdateAvailable`) il pulsante è evidenziato con il colore
+    /// dell'interfaccia (predefinito o personalizzato, lo stesso del resto dell'app) finché non si rilegge.
+    @ViewBuilder private var refreshButton: some View {
+        if vm.remoteUpdateAvailable && !(vm.libraryBusy || vm.refreshAllRunning) {
+            refreshButtonBase
+                .buttonStyle(.borderedProminent)
+                .tint(settings.accentColor)   // il colore scelto in Impostazioni: la barra del titolo non eredita il `.tint` della finestra
+                .help(t("tooltip_refresh_server_changed"))
+        } else {
+            refreshButtonBase
+                .buttonStyle(.automatic)
+                .help(vm.device != nil && !vm.isDeviceReadOnly ? t("tooltip_refresh_all") : t("tooltip_reload_library"))
+        }
+    }
+
+    private var refreshButtonBase: some View {
         Button { Task { await vm.refreshAll() } } label: {
             if vm.libraryBusy || vm.refreshAllRunning { ProgressView().controlSize(.small).frame(minWidth: 26, minHeight: 24) } else { toolbarIcon("arrow.clockwise") }
         }
-        .buttonStyle(.automatic)
-        .help(vm.device != nil && !vm.isDeviceReadOnly ? t("tooltip_refresh_all") : t("tooltip_reload_library"))
         .disabled(vm.isBusy)
     }
 
@@ -1885,6 +2051,102 @@ struct UpdateCapsuleView: View {
     }
 }
 
+/// Capsula dell'esito del software con le novità (changelog) di Garmin: il tooltip resta, e con un click si apre un popover
+/// con lo stesso testo, selezionabile e copiabile (il tooltip compare dopo un ritardo e non si può copiare).
+/// «Altre versioni…» mostra lo storico salvato in UpdateNotes.json: tutte le versioni se il dispositivo riceve le beta
+/// (programma Garmin Beta), solo le ufficiali (Stable) altrimenti. Senza novità né storico la capsula si comporta come prima.
+struct UpdateNotesCapsule: View {
+    let text: String
+    let color: Color
+    let title: String
+    let notes: String?
+    let tooltip: String
+    var deviceID: String? = nil
+    var shownVersion: String? = nil
+    var includeBeta: Bool = false
+    @State private var showNotes = false
+
+    private func loadOlder() -> [DeviceXMLStore.StoredUpdateNote] {
+        deviceID.map { DeviceXMLStore.updateNotesHistory(forDevice: $0, excludingVersion: shownVersion, includeBeta: includeBeta) } ?? []
+    }
+
+    var body: some View {
+        UpdateCapsuleView(text: text, color: color)
+            .help(tooltip)
+            .onTapGesture {
+                let older = loadOlder()
+                AppLog.debug("Novità aggiornamento: dispositivo …\(deviceID?.suffix(4) ?? "?"), versione mostrata \(shownVersion ?? "?"), beta \(includeBeta ? "sì" : "no"): \(older.count) altre versioni nel file" +
+                             (older.isEmpty ? "" : " (" + older.map { $0.version }.joined(separator: ", ") + ")"))
+                if !(notes ?? "").isEmpty || !older.isEmpty { showNotes.toggle() }
+            }
+            .popover(isPresented: $showNotes, arrowEdge: .bottom) {
+                // L'elenco si legge qui, a ogni apertura, e arriva già pronto: il contenuto del popover non dipende dallo stato della capsula.
+                UpdateNotesPopover(title: title, notes: notes, older: loadOlder())
+            }
+    }
+}
+
+/// Contenuto del popover delle novità: riceve il testo e l'elenco delle altre versioni già pronti e ha il proprio stato («mostra tutto»).
+private struct UpdateNotesPopover: View {
+    let title: String
+    let notes: String?
+    let older: [DeviceXMLStore.StoredUpdateNote]
+    @State private var showMore: Bool
+
+    init(title: String, notes: String?, older: [DeviceXMLStore.StoredUpdateNote]) {
+        self.title = title
+        self.notes = notes
+        self.older = older
+        // Senza novità per la versione mostrata l'elenco parte già aperto.
+        _showMore = State(initialValue: (notes ?? "").isEmpty)
+    }
+
+    private func header(_ n: DeviceXMLStore.StoredUpdateNote) -> String {
+        var parts = [n.version]
+        if n.channel == "beta" { parts.append("Beta") }
+        if let d = n.releasedDate {
+            parts.append(d.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: TimeZone(identifier: "UTC") ?? .current)))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        let _ = AppLog.debug("Novità aggiornamento: il popover vede \(older.count) altre versioni (mostra tutto: \(showMore ? "sì" : "no"))")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.headline)
+                Spacer(minLength: 12)
+                if !older.isEmpty {
+                    Button(showMore ? t("update_notes_less") : t("update_notes_more")) { showMore.toggle() }
+                        .buttonStyle(.link)
+                }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let notes, !notes.isEmpty {
+                        Text(notes).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    if showMore {
+                        ForEach(older, id: \.version) { n in
+                            Divider()
+                            Text(header(n)).font(.subheadline.weight(.semibold))
+                            Text(n.notes).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+            }
+            // Chiuso: alto quanto il testo (al massimo 320). Aperto («Altre versioni…»): almeno 360, circa 4 volte il popover chiuso
+            // con le tre righe di una versione, fino a 520; con «Mostra meno» torna alla misura di prima.
+            .frame(minHeight: showMore ? 360 : nil, maxHeight: showMore ? 520 : 320)
+            // L'altezza segue il contenuto (entro i limiti sopra) e non quella che offre la finestra: senza questo, dopo
+            // l'allungamento l'area restava alta quanto la finestra e «Mostra meno» non la riportava alla misura originale.
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(width: 360)
+    }
+}
+
 /// Finestra «Aggiornamento disponibile»: una riga per dispositivo registrato, con il pallino dell'esito nella prima
 /// colonna e il nome assegnato nella seconda. Le novità (changelog) sono nel tooltip del pallino «Upgrade Available».
 private struct DeviceUpdateSheet: View {
@@ -2012,7 +2274,7 @@ struct MapsSheet: View {
         switch entry.updateAvailable {
         case .some(true):
             UpdateCapsuleView(text: "Update Available", color: UpdateCapsuleView.available, fontSize: Self.badgeFontSize)
-                .help(t("maps_update_tooltip", entry.installedVersion ?? "—", entry.version))
+                .help(t("maps_update_tooltip", entry.installedVersionDisplay ?? "—", entry.version))
         case .some(false):
             if let days = staleDays {
                 // Ultimo controllo troppo vecchio: «aggiornata» non è più una garanzia, si invita a ricontrollare.
@@ -2032,7 +2294,7 @@ struct MapsSheet: View {
             badge(entry).frame(width: 100, alignment: .leading)
             Text(entry.name).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 8)
-            Text(entry.installedVersion ?? entry.version).foregroundStyle(.secondary).monospacedDigit()
+            Text(entry.installedVersionDisplay ?? entry.version).foregroundStyle(.secondary).monospacedDigit()
             Text(sizeText(entry.sizeBytes)).foregroundStyle(.secondary).monospacedDigit()
                 .frame(width: 70, alignment: .trailing)
         }
@@ -2860,7 +3122,7 @@ struct DeviceFileBrowserView: View {
         panel.allowsMultipleSelection = false
         panel.prompt = t("device_files_copy_here")
         panel.message = t("device_files_copy_panel_message", files.count)
-        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        guard StallWatchdog.modal({ panel.runModal() }) == .OK, let folder = panel.url else { return }
         copying = true
         copyMessage = nil
         Task {

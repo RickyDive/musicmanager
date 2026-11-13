@@ -24,10 +24,13 @@ struct SettingsView: View {
     @ObservedObject private var metrics = MainWindowMetrics.shared
     @ObservedObject private var loc = LocalizationManager.shared
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var users = UserProfiles.shared
+    @ObservedObject private var driveRoots = DriveRootCache.shared
     @ObservedObject private var remoteLoader = RemoteLibraryManager.shared
     @ObservedObject private var reach = LibraryReachability.shared
     /// Esito dell'ultima lettura di una libreria remota (errore da mostrare sotto l'elenco).
     @State private var remoteError: String?
+    @State private var showFirstUserSheet = false
 
     /// Vero mentre è visibile l'alert di spiegazione mostrato la prima volta che si accende
     /// "Cerca copertine mancanti online" (vedi sotto). Non è legato direttamente al Toggle: il
@@ -105,7 +108,9 @@ struct SettingsView: View {
                     .buttonStyle(.plain)
                 }
                 Spacer(minLength: 0)
+                UserProfileMenu(style: .settings)   // 2.4: profili utente (sperimentale), a destra della barra
             }
+            .padding(.horizontal, 20)   // 2.4: barra allineata ai riquadri (stesso margine del modulo)
 
             Group {
                 switch pane {
@@ -116,8 +121,8 @@ struct SettingsView: View {
                 }
             }
         }
-        .padding(20)
-        .frame(width: 760, height: metrics.settingsHeight)   // 90 % della finestra principale, centrata su di essa
+        .padding(.vertical, 20)
+        .frame(width: 720, height: metrics.settingsHeight)   // 90 % della finestra principale, centrata su di essa
         .background(CenterOnMainWindow(trigger: metrics.settingsHeight))
         .onAppear {
             Task { await LibraryReachability.shared.refresh() }
@@ -135,7 +140,7 @@ struct SettingsView: View {
             set: { if !$0 { pendingRemoveLibraryID = nil } }
         )) {
             Button(t("button_remove"), role: .destructive) {
-                if let id = pendingRemoveLibraryID {
+                if let id = pendingRemoveLibraryID, !externalBusy {
                     settings.remoteLibraries.removeAll { $0.id == id }
                     selectedLibrary = nil
                 }
@@ -156,7 +161,7 @@ struct SettingsView: View {
             set: { if !$0 { pendingRemoveDriveID = nil } }
         )) {
             Button(t("button_remove"), role: .destructive) {
-                if let id = pendingRemoveDriveID { settings.driveLibraries.removeAll { $0.id == id } }
+                if let id = pendingRemoveDriveID, !externalBusy { settings.driveLibraries.removeAll { $0.id == id } }
                 pendingRemoveDriveID = nil
             }
             Button(t("button_cancel"), role: .cancel) { pendingRemoveDriveID = nil }
@@ -193,6 +198,7 @@ struct SettingsView: View {
                 Spacer()
                 Button(t("settings_reset_all")) { confirmReset = true }
             }
+            .padding(.trailing, 20)   // 2.4: bordo destro allineato ai riquadri
         }
     }
 
@@ -221,15 +227,6 @@ struct SettingsView: View {
             settingRow(t("settings_playlist_types"), hint: t("settings_playlist_types_hint")) {
                 Picker("", selection: $settings.playlistTypeFilter) {
                     ForEach(AppSettings.PlaylistTypeFilter.allCases) { option in
-                        Text(option.title).tag(option)
-                    }
-                }
-                .labelsHidden()
-            }
-
-            settingRow(t("settings_album_order"), hint: t("settings_album_order_hint")) {
-                Picker("", selection: $settings.albumOrder) {
-                    ForEach(AppSettings.AlbumOrder.allCases) { option in
                         Text(option.title).tag(option)
                     }
                 }
@@ -521,6 +518,20 @@ struct SettingsView: View {
                     .disabled(!settings.lookupMissingArtworkOnline)
             }
 
+            // Mercato delle ricerche online (copertine e miniature degli artisti): globale, perché la cache è comune a tutti gli utenti.
+            settingRow(t("settings_artwork_store"),
+                       hint: t("settings_artwork_store_hint", ArtworkStore.displayName(ArtworkStore.automaticCode), ArtworkStore.displayName(ArtworkStore.primary))) {
+                Picker("", selection: $settings.artworkStoreCountry) {
+                    Text(t("settings_artwork_store_auto", ArtworkStore.displayName(ArtworkStore.automaticCode))).tag("")
+                    Divider()
+                    ForEach(ArtworkStore.selectableCountries, id: \.code) { country in
+                        Text(country.name).tag(country.code)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 240)
+            }
+
             // Dimensione della cache (stesso corpo delle altre voci) a sinistra e, sulla stessa riga, il pulsante a destra.
             HStack {
                 Text(t("settings_artwork_cache_size",
@@ -551,11 +562,7 @@ struct SettingsView: View {
                     .padding(.horizontal, 10).padding(.vertical, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
-                remoteLibrariesSection
-                    .padding(.horizontal, 10).padding(.vertical, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
-                driveLibrariesSection
+                externalSourcesSection
                     .padding(.horizontal, 10).padding(.vertical, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
@@ -608,6 +615,20 @@ struct SettingsView: View {
             }
             .padding(.top, 2)
             Text(t("settings_library_threads_hint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Divider().padding(.top, 6)
+            Toggle(t("settings_profiles"), isOn: Binding(
+                get: { users.enabled },
+                set: { on in
+                    if !on { users.disable() }
+                    else if users.profiles.isEmpty { showFirstUserSheet = true }   // l'interruttore si accende alla conferma
+                    else { users.enable() }
+                }))
+                .padding(.top, 2)
+                .sheet(isPresented: $showFirstUserSheet) { ProfileEditorSheet(mode: .add) }
+            Text(t("settings_profiles_hint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -691,11 +712,31 @@ struct SettingsView: View {
         let maps = stored.installed
         let lines = maps.map { m -> String in
             let state = m.updateAvailable == true ? "Update Available" : (m.updateAvailable == false ? "Map Updated" : "")
-            return "\(m.name) \(m.installedVersion ?? m.version)" + (state.isEmpty ? "" : " — \(state)")
+            return "\(m.name) \(m.installedVersionDisplay ?? m.version)" + (state.isEmpty ? "" : " — \(state)")
         }
         var text = lines.joined(separator: "\n")
         text += "\n\n" + mapsCheckedText(stored.checkedAt)
         return text
+    }
+
+    @FocusState private var focusedDeviceNickname: String?
+
+    /// Nickname: gli spazi all'inizio e in fondo si tolgono uscendo dal campo o premendo Invio (nessun controllo a ogni tasto);
+    /// quelli in mezzo restano.
+    private func trimDeviceNickname(_ id: String) {
+        let current = settings.knownDevices.first { $0.id == id }?.nickname ?? ""
+        let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed != current { settings.setNickname(trimmed, forDevice: id) }
+    }
+
+    private func trimRemoteNickname(_ id: UUID) {
+        guard let i = settings.remoteLibraries.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = settings.remoteLibraries[i].nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed != settings.remoteLibraries[i].nickname { settings.remoteLibraries[i].nickname = trimmed }
+    }
+
+    private func trimDriveNickname(_ id: UUID) {
+        settings.updateDriveLibrary(id) { $0.nickname = $0.nickname.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 
     /// Binding sicuro del Nickname di un dispositivo, cercato per Global ID a ogni accesso.
@@ -757,6 +798,11 @@ struct SettingsView: View {
                         TextField("", text: deviceNicknameBinding(device.id))
                             .labelsHidden()
                             .textFieldStyle(.plain)
+                            .focused($focusedDeviceNickname, equals: device.id)
+                            .onSubmit { trimDeviceNickname(device.id) }
+                            .onChange(of: focusedDeviceNickname) { old, new in
+                                if old == device.id, new != device.id { trimDeviceNickname(device.id) }
+                            }
                             .accessibilityIdentifier("noContextMenu")   // click destro: nessun menu (vedi AppDelegate)
                             .padding(.horizontal, 8)
                             .frame(width: deviceNicknameColumnWidth, alignment: .leading)
@@ -781,7 +827,7 @@ struct SettingsView: View {
                             }
                         ZStack {
                             Color.clear
-                            if hasMapsData(device) {
+                            if settings.checkDeviceUpdates, hasMapsData(device) {
                                 Button { openMaps(forDevice: device.id) } label: {
                                     Image(systemName: "map.circle.fill").font(.system(size: 14))
                                         .symbolRenderingMode(.palette)
@@ -794,7 +840,16 @@ struct SettingsView: View {
                         .frame(width: deviceMapsColumnWidth, alignment: .center)
                         HStack(spacing: 5) {
                             Text(device.softwareVersion.isEmpty ? "—" : device.softwareVersion).lineLimit(1)
-                            if let ok = device.softwareUpToDate {
+                            // 2.4 Internal: versione arrivata dal programma Garmin Beta (stesso colore della capsula «Beta» della finestra principale).
+                            if settings.checkDeviceUpdates,
+                               settings.releaseChannel(forDevice: device.id, version: device.softwareVersion)?.contains("beta") == true {
+                                Image(systemName: "b.square.fill")
+                                    .font(.system(size: 14))
+                                    .frame(height: 16)
+                                    .foregroundStyle(Color(red: 0.70, green: 0.78, blue: 0.88))
+                                    .help(t("tooltip_release_beta"))
+                            }
+                            if settings.checkDeviceUpdates, let ok = device.softwareUpToDate {
                                 Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
                                     .font(.system(size: 14))
                                     .frame(height: 16)   // più grande, senza aumentare l'altezza della riga
@@ -898,17 +953,36 @@ struct SettingsView: View {
     /// MAC del router della rete attuale (nil = non rilevato): serve a scegliere l'icona di ogni riga.
     @State private var currentRouter: String?
 
-    /// Tabella a due colonne (Library Nickname / Path) delle librerie remote: file XML di Musica esportato
-    /// dall'altro Mac. Al massimo `AppSettings.maxRemoteLibraries`; i nomi compaiono nel selettore della
-    /// finestra principale. Righe a strisce e selezione come le tabelle di sistema; sotto, i pulsanti
-    /// «+ / −» e quello per scegliere il file della riga selezionata.
-    private var remoteLibrariesSection: some View {
+    // MARK: - External Sources (tabella unica: librerie remote + cartelle su unità esterne)
+
+    private let externalTypeColumnWidth: CGFloat = 24
+    private let externalVisibleRows = 5
+
+    private enum ExternalRow: Identifiable {
+        case remote(RemoteLibraryConfig)
+        case drive(DriveLibraryConfig)
+        var id: UUID {
+            switch self {
+            case .remote(let l): return l.id
+            case .drive(let l): return l.id
+            }
+        }
+    }
+    /// Righe della tabella: prima le librerie remote (XML in rete), poi le cartelle su unità. I dati restano separati.
+    private var externalRows: [ExternalRow] {
+        settings.remoteLibraries.map(ExternalRow.remote) + settings.driveLibraries.map(ExternalRow.drive)
+    }
+    private var externalCount: Int { settings.remoteLibraries.count + settings.driveLibraries.count }
+
+    /// Unica tabella delle sorgenti esterne (massimo `AppSettings.maxExternalSources`): XML di Musica di un altro Mac
+    /// (file in rete) e cartelle audio su unità esterne. Colonne: tipo, stato (pallino), Nickname, Percorso.
+    private var externalSourcesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(t("settings_remote_libraries")).font(.headline)
+            Text(t("settings_external_sources")).font(.headline)
 
             VStack(spacing: 0) {
-                // Intestazione (testi allineati a sinistra)
                 HStack(spacing: 0) {
+                    Color.clear.frame(width: externalTypeColumnWidth)
                     Color.clear.frame(width: deviceConnectedColumnWidth)   // colonna senza titolo: stato (pallino)
                     Divider().frame(height: 16)
                     Text(t("remote_col_nickname"))
@@ -922,16 +996,114 @@ struct SettingsView: View {
                 .font(.system(size: 10, weight: .semibold))
                 .frame(height: tableRowHeight)
                 Divider()
-                // Righe (con strisce vuote fino a riempire la tabella); scorrono se sono più di quelle visibili.
                 ScrollView {
                 VStack(spacing: 0) {
-                // Si itera sui valori (non su `$array`, i cui binding per elemento vanno in crash «Index out of
-                // range» se la riga viene rimossa mentre è ancora a schermo) e il campo scrive per identificativo.
-                ForEach(settings.remoteLibraries) { lib in
-                    let index = settings.remoteLibraries.firstIndex { $0.id == lib.id } ?? 0
+                // Si itera sui valori (non su `$array`: i binding per elemento vanno in crash se la riga sparisce mentre è a schermo).
+                ForEach(Array(externalRows.enumerated()), id: \.element.id) { index, row in
                     let stripe = index % 2 == 1 ? Color.primary.opacity(0.05) : Color.clear
-                    let isSelected = selectedLibrary == lib.id
+                    let isSelected = selectedLibrary == row.id || selectedDriveID == row.id
+                    Group {
+                        switch row {
+                        case .remote(let lib): remoteRow(lib)
+                        case .drive(let lib): driveRow(lib)
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .frame(height: tableRowHeight)
+                    .background(isSelected ? settings.accentColor.opacity(0.28) : stripe)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(TapGesture().onEnded {
+                        switch row {
+                        case .remote: selectedLibrary = row.id; selectedDriveID = nil
+                        case .drive: selectedDriveID = row.id; selectedLibrary = nil
+                        }
+                    })
+                }
+                ForEach(externalCount..<max(externalVisibleRows, externalCount), id: \.self) { index in
+                    (index % 2 == 1 ? Color.primary.opacity(0.05) : Color.clear).frame(height: tableRowHeight)
+                }
+                }
+                }
+            }
+            .onChange(of: focusedNickname) { old, new in
+                if let new { selectedLibrary = new; selectedDriveID = nil }
+                if let old, new != old { trimRemoteNickname(old) }
+                // Uscendo dal campo del nome di una libreria appena aggiunta: se è vuoto si torna lì (il nome è obbligatorio).
+                if let old, old == pendingRemoteNameID, new != old { commitRemoteName(old) }
+            }
+            .onChange(of: focusedDriveNickname) { old, new in
+                if let new { selectedDriveID = new; selectedLibrary = nil }
+                if let old, new != old { trimDriveNickname(old) }
+                if let old, old == pendingDriveNameID, new != old { commitDriveName(old) }
+            }
+            .frame(height: tableRowHeight * CGFloat(externalVisibleRows + 1) + 1)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.4)))
+
+            HStack(spacing: 10) {
+                // Pulsanti «+ | −» in un unico gruppo; «+» apre un menu per scegliere il tipo di sorgente.
+                HStack(spacing: 0) {
+                    Menu {
+                        Button(t("external_add_xml")) { addRemoteLibrary() }
+                        Button(t("external_add_folder")) { addDriveLibrary() }
+                            .disabled(driveManager.progress != nil)
+                    } label: {
+                        Image(systemName: "plus").foregroundStyle(Color.primary).frame(width: 28, height: 22).contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .foregroundStyle(.primary)   // come «−» (altrimenti il «+» prende il colore d'accento)
+                    .tint(.primary)
+                    .frame(width: 28, height: 22)   // stessa larghezza di «−»
+                    .disabled(externalCount >= AppSettings.maxExternalSources || pendingRemoteNameID != nil || pendingDriveNameID != nil || externalBusy)
+                    .help(t("external_add_help"))
+                    Divider().frame(height: 14)
+                    Button { removeSelectedExternal() } label: { Image(systemName: "minus").frame(width: 28, height: 22).contentShape(Rectangle()) }
+                        .disabled(externalCount == 0 || externalBusy)
+                        .help(t("remote_remove_help"))
+                }
+                .buttonStyle(.plain)
+                .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+
+                Text(t("external_max_hint", AppSettings.maxExternalSources)).font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 10)
+                // Montaggio automatico all'avvio (solo librerie remote; spento: solo sondaggio).
+                Text(t("settings_mount_at_launch")).font(.caption).foregroundStyle(.secondary)
+                Toggle("", isOn: $settings.mountRemoteLibrariesAtLaunch)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help(t("settings_mount_at_launch_help"))
+            }
+            if let p = remoteLoader.progress, p.inSettings {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("\(p.nickname): \(p.phase)").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if let progress = driveManager.progress {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(progress).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if pendingRemoteNameID != nil || pendingDriveNameID != nil {
+                Text(t("library_name_required")).font(.caption).foregroundStyle(.red)
+            }
+            if let remoteError { Text(remoteError).font(.caption).foregroundStyle(.red) }
+            if let driveError { Text(driveError).font(.caption).foregroundStyle(.red) }
+            Text(t("remote_hint")).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(t("drive_hint")).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func remoteRow(_ lib: RemoteLibraryConfig) -> some View {
                     HStack(spacing: 0) {
+                        Image(systemName: "network").font(.system(size: 11)).foregroundStyle(.secondary)
+                            .frame(width: externalTypeColumnWidth)
+                            .help(t("external_type_remote"))
                         // Stato: pallino verde pieno = volume montato (file XML leggibile); cerchio verde vuoto = il server risponde ma il
                         // volume non è montato (si monta alla scelta della libreria); rosso = non raggiungibile. Nessun pallino finché non
                         // si è fatta la prima verifica. Un clic sul pallino apre la finestrella della rete (MAC del router) della libreria.
@@ -941,7 +1113,7 @@ struct SettingsView: View {
                             guard reach.isOnline else { return }   // senza rete non si può leggere né modificare il MAC del router
                             macDraft = lib.homeNetwork ?? ""
                             macMessage = nil
-                            selectedLibrary = lib.id
+                            selectedLibrary = lib.id; selectedDriveID = nil
                             editingNetworkID = lib.id
                         } label: {
                             ZStack {
@@ -971,7 +1143,7 @@ struct SettingsView: View {
                             .labelsHidden()
                             .textFieldStyle(.plain)
                             .focused($focusedNickname, equals: lib.id)
-                            .onSubmit { commitRemoteName(lib.id) }
+                            .onSubmit { trimRemoteNickname(lib.id); commitRemoteName(lib.id) }
                             .padding(.horizontal, 8)
                             .frame(width: deviceNicknameColumnWidth, alignment: .leading)
                         Text(lib.path.isEmpty ? "—" : (lib.networkAddress ?? lib.path))
@@ -983,90 +1155,11 @@ struct SettingsView: View {
                             .contentShape(Rectangle())
                             // Click sul Path: con il Nickname compilato apre subito la scelta del file XML.
                             .onTapGesture {
-                                selectedLibrary = lib.id
+                                selectedLibrary = lib.id; selectedDriveID = nil
                                 if hasNickname(lib) { chooseXML(for: lib.id) }
                             }
                     }
-                    .font(.system(size: 11))
-                    .frame(height: tableRowHeight)
-                    .background(isSelected ? AppSettings.shared.accentColor.opacity(0.28) : stripe)
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(TapGesture().onEnded { selectedLibrary = lib.id })
-                }
-                // Righe vuote a strisce, fino a riempire la tabella.
-                ForEach(settings.remoteLibraries.count..<max(tableVisibleRows, settings.remoteLibraries.count), id: \.self) { index in
-                    (index % 2 == 1 ? Color.primary.opacity(0.05) : Color.clear).frame(height: tableRowHeight)
-                }
-                }
-                }
-            }
-            .onChange(of: focusedNickname) { old, new in
-                if let new { selectedLibrary = new }
-                // Uscendo dal campo del nome di una libreria appena aggiunta: se è vuoto si torna lì (il nome è obbligatorio).
-                if let old, old == pendingRemoteNameID, new != old { commitRemoteName(old) }
-            }
-            .frame(height: tableRowHeight * CGFloat(tableVisibleRows + 1) + 1)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.4)))
-
-            HStack(spacing: 10) {
-                // Pulsanti «+ | −» in un unico gruppo, come nelle tabelle di sistema.
-                HStack(spacing: 0) {
-                    Button { addRemoteLibrary() } label: { Image(systemName: "plus").frame(width: 28, height: 22).contentShape(Rectangle()) }
-                    .disabled(settings.remoteLibraries.count >= AppSettings.maxRemoteLibraries || pendingRemoteNameID != nil)
-                    .help(t("remote_add"))
-                    Divider().frame(height: 14)
-                    Button {
-                        // Toglie la riga selezionata; se la selezione si fosse persa, l'ultima dell'elenco.
-                        let id = settings.remoteLibraries.first { $0.id == selectedLibrary }?.id
-                            ?? settings.remoteLibraries.last?.id
-                        if let id {
-                            if pendingRemoteNameID == id { pendingRemoteNameID = nil }
-                            focusedNickname = nil
-                            // Una riga appena aggiunta e ancora vuota si toglie subito; una libreria vera chiede conferma.
-                            if settings.remoteLibraries.first(where: { $0.id == id })?.isUsable == true {
-                                pendingRemoveLibraryID = id
-                            } else {
-                                settings.remoteLibraries.removeAll { $0.id == id }
-                                selectedLibrary = nil
-                            }
-                        }
-                    } label: { Image(systemName: "minus").frame(width: 28, height: 22).contentShape(Rectangle()) }
-                    .disabled(settings.remoteLibraries.isEmpty)
-                    .help(t("remote_remove_help"))
-                }
-                .buttonStyle(.plain)
-                .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
-
-                Text(t("remote_max_hint", AppSettings.maxRemoteLibraries)).font(.caption).foregroundStyle(.secondary)
-                Spacer(minLength: 10)
-                // Montaggio automatico all'avvio (spento: solo sondaggio; il volume si monta alla scelta della libreria).
-                Text(t("settings_mount_at_launch")).font(.caption).foregroundStyle(.secondary)
-                Toggle("", isOn: $settings.mountRemoteLibrariesAtLaunch)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .help(t("settings_mount_at_launch_help"))
-            }
-            // Lettura in corso (senza finestra): una riga con l'indicatore e la fase.
-            if let p = remoteLoader.progress, p.inSettings {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("\(p.nickname): \(p.phase)").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            if pendingRemoteNameID != nil {
-                Text(t("library_name_required")).font(.caption).foregroundStyle(.red)
-            }
-            if let remoteError {
-                Text(remoteError).font(.caption).foregroundStyle(.red)
-            }
-            Text(t("remote_hint")).font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
     }
-
-    // MARK: - External Drive Libraries (2.2)
 
     private func driveNicknameBinding(_ id: UUID) -> Binding<String> {
         Binding(
@@ -1075,35 +1168,12 @@ struct SettingsView: View {
         )
     }
 
-    /// Cartella con i file audio su un'unità esterna: indice JSON proprio con i soli brani compatibili con il dispositivo.
-    /// Tabella come quella delle Remote Libraries (pallino di stato, Nickname, Percorso) con i pulsanti «+ | −» sotto.
-    /// La riscansione non ha più un pulsante: parte da sola scegliendo la libreria nel selettore della finestra principale.
-    private var driveLibrariesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(t("settings_drive_libraries")).font(.headline)
-
-            VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    Color.clear.frame(width: deviceConnectedColumnWidth)   // colonna senza titolo: stato (pallino)
-                    Divider().frame(height: 16)
-                    Text(t("remote_col_nickname"))
-                        .padding(.horizontal, 8)
-                        .frame(width: deviceNicknameColumnWidth, alignment: .leading)
-                    Divider().frame(height: 16)
-                    Text(t("remote_col_path"))
-                        .padding(.horizontal, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .font(.system(size: 10, weight: .semibold))
-                .frame(height: tableRowHeight)
-                Divider()
-                ScrollView {
-                VStack(spacing: 0) {
-                ForEach(settings.driveLibraries) { lib in
-                    let index = settings.driveLibraries.firstIndex { $0.id == lib.id } ?? 0
-                    let stripe = index % 2 == 1 ? Color.primary.opacity(0.05) : Color.clear
-                    let available = DriveLibraryService.rootURL(lib) != nil
-                    HStack(spacing: 0) {
+    private func driveRow(_ lib: DriveLibraryConfig) -> some View {
+        let available = DriveRootCache.shared.root(lib) != nil
+        return HStack(spacing: 0) {
+                        Image(systemName: "externaldrive").font(.system(size: 11)).foregroundStyle(.secondary)
+                            .frame(width: externalTypeColumnWidth)
+                            .help(t("external_type_drive"))
                         // Pallino verde = unità collegata e cartella raggiungibile; rosso = non disponibile.
                         ZStack {
                             Color.clear
@@ -1115,7 +1185,7 @@ struct SettingsView: View {
                             .labelsHidden()
                             .textFieldStyle(.plain)
                             .focused($focusedDriveNickname, equals: lib.id)
-                            .onSubmit { commitDriveName(lib.id) }
+                            .onSubmit { trimDriveNickname(lib.id); commitDriveName(lib.id) }
                             .accessibilityIdentifier("noContextMenu")
                             .padding(.horizontal, 8)
                             .frame(width: deviceNicknameColumnWidth, alignment: .leading)
@@ -1126,68 +1196,46 @@ struct SettingsView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .help(lib.path)
                     }
-                    .font(.system(size: 11))
-                    .frame(height: tableRowHeight)
-                    .background(selectedDriveID == lib.id ? settings.accentColor.opacity(0.28) : stripe)
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(TapGesture().onEnded { selectedDriveID = lib.id })
-                }
-                ForEach(settings.driveLibraries.count..<max(tableVisibleRows, settings.driveLibraries.count), id: \.self) { index in
-                    (index % 2 == 1 ? Color.primary.opacity(0.05) : Color.clear).frame(height: tableRowHeight)
-                }
-                }
-                }
-            }
-            .onChange(of: focusedDriveNickname) { old, new in
-                if let new { selectedDriveID = new }
-                if let old, old == pendingDriveNameID, new != old { commitDriveName(old) }
-            }
-            .frame(height: tableRowHeight * CGFloat(tableVisibleRows + 1) + 1)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.4)))
+    }
 
-            HStack(spacing: 10) {
-                // Pulsanti «+ | −» in un unico gruppo, come nelle Remote Libraries.
-                HStack(spacing: 0) {
-                    Button { addDriveLibrary() } label: { Image(systemName: "plus").frame(width: 28, height: 22).contentShape(Rectangle()) }
-                        .disabled(settings.driveLibraries.count >= AppSettings.maxDriveLibraries || driveManager.progress != nil || pendingDriveNameID != nil)
-                        .help(t("drive_add"))
-                    Divider().frame(height: 14)
-                    Button {
-                        // Toglie la cartella selezionata (con conferma); se la selezione si fosse persa, l'ultima dell'elenco.
-                        let id = settings.driveLibraries.first { $0.id == selectedDriveID }?.id ?? settings.driveLibraries.last?.id
-                        if let id {
-                            // Una cartella appena scelta e ancora senza nome si toglie subito; una libreria vera chiede conferma.
-                            if pendingDriveNameID == id {
-                                pendingDriveNameID = nil
-                                focusedDriveNickname = nil
-                                settings.driveLibraries.removeAll { $0.id == id }
-                                selectedDriveID = nil
-                            } else {
-                                pendingRemoveDriveID = id
-                            }
-                        }
-                    } label: { Image(systemName: "minus").frame(width: 28, height: 22).contentShape(Rectangle()) }
-                        .disabled(settings.driveLibraries.isEmpty)
-                        .help(t("remote_remove_help"))
-                }
-                .buttonStyle(.plain)
-                .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+    /// Una libreria si sta leggendo o scansionando (anche dalla finestra principale): niente aggiunte né rimozioni,
+    /// altrimenti la lettura finisce e lascia una copia di una libreria ormai tolta dall'elenco.
+    private var externalBusy: Bool { remoteLoader.progress != nil || driveManager.progress != nil }
 
-                Text(t("remote_max_hint", AppSettings.maxDriveLibraries)).font(.caption).foregroundStyle(.secondary)
-            }
-            if let progress = driveManager.progress {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(progress).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            if pendingDriveNameID != nil {
-                Text(t("library_name_required")).font(.caption).foregroundStyle(.red)
-            }
-            if let driveError { Text(driveError).font(.caption).foregroundStyle(.red) }
-            Text(t("drive_hint")).font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+    /// «−»: toglie la riga selezionata; se la selezione si fosse persa, l'ultima della tabella.
+    private func removeSelectedExternal() {
+        if let id = settings.remoteLibraries.first(where: { $0.id == selectedLibrary })?.id {
+            removeRemote(id)
+        } else if let id = settings.driveLibraries.first(where: { $0.id == selectedDriveID })?.id {
+            removeDrive(id)
+        } else if let id = settings.driveLibraries.last?.id {
+            removeDrive(id)
+        } else if let id = settings.remoteLibraries.last?.id {
+            removeRemote(id)
+        }
+    }
+
+    private func removeRemote(_ id: UUID) {
+        if pendingRemoteNameID == id { pendingRemoteNameID = nil }
+        focusedNickname = nil
+        // Una riga appena aggiunta e ancora vuota si toglie subito; una libreria vera chiede conferma.
+        if settings.remoteLibraries.first(where: { $0.id == id })?.isUsable == true {
+            pendingRemoveLibraryID = id
+        } else {
+            settings.remoteLibraries.removeAll { $0.id == id }
+            selectedLibrary = nil
+        }
+    }
+
+    private func removeDrive(_ id: UUID) {
+        // Una cartella appena scelta e ancora senza nome si toglie subito; una libreria vera chiede conferma.
+        if pendingDriveNameID == id {
+            pendingDriveNameID = nil
+            focusedDriveNickname = nil
+            settings.driveLibraries.removeAll { $0.id == id }
+            selectedDriveID = nil
+        } else {
+            pendingRemoveDriveID = id
         }
     }
 
@@ -1201,7 +1249,7 @@ struct SettingsView: View {
         panel.message = t("drive_pick_message")
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard StallWatchdog.modal({ panel.runModal() }) == .OK, let url = panel.url else { return }
         driveSetup = DriveSetup(url: url, choices: choices, automatic: driveManager.automaticDevice(in: choices))
     }
 
@@ -1234,9 +1282,9 @@ struct SettingsView: View {
         let p = NSOpenPanel()
         p.title = t("external_pick_xml_title")
         p.message = t("external_pick_xml_message")
-        p.allowedContentTypes = [.xml, .propertyList]
+        p.allowedContentTypes = [.xml, .propertyList, .json]
         p.canChooseDirectories = false
-        guard p.runModal() == .OK, let url = p.url else { return }
+        guard StallWatchdog.modal({ p.runModal() }) == .OK, let url = p.url else { return }
         var cfg = RemoteLibraryConfig()
         cfg.path = url.path
         cfg.bookmark = FileBookmark.make(for: url)
@@ -1352,9 +1400,9 @@ struct SettingsView: View {
         let p = NSOpenPanel()
         p.title = t("external_pick_xml_title")
         p.message = t("external_pick_xml_message")
-        p.allowedContentTypes = [.xml, .propertyList]
+        p.allowedContentTypes = [.xml, .propertyList, .json]
         p.canChooseDirectories = false
-        guard p.runModal() == .OK, let url = p.url,
+        guard StallWatchdog.modal({ p.runModal() }) == .OK, let url = p.url,
               let i = settings.remoteLibraries.firstIndex(where: { $0.id == id }) else { return }
         settings.remoteLibraries[i].path = url.path
         settings.remoteLibraries[i].networkAddress = nil

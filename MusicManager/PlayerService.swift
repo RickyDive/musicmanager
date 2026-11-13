@@ -39,6 +39,17 @@ final class PlayerService: NSObject, ObservableObject {
     var onNext: (() -> Void)?
     var onPrevious: (() -> Void)?
 
+    /// Anteprima (Custom Playlist): ogni brano parte dal 30 % della durata, suona 15 s e poi si passa al successivo
+    /// (`onFinished`, come per un brano finito da solo). `previewMode` lo imposta AppViewModel prima di ogni brano.
+    /// Brani di 16 s o meno: si suonano interi. Se 30 % + 15 s supera la durata, si parte a «durata − 15 s».
+    var previewMode = false
+    static let previewStartFraction = 0.30
+    static let previewLength: TimeInterval = 15
+    private var previewEnd: TimeInterval?
+    private var previewApplied = false
+    /// Spegnendo l'anteprima mentre un brano suona, quel brano prosegue fino alla fine.
+    func cancelPreview() { previewEnd = nil }
+
     /// Informazioni del brano pubblicate al sistema ("In riproduzione"): le legge l'Apple TV (banner con copertina, artista e
     /// titolo), il Centro di Controllo e i tasti multimediali. Le imposta AppViewModel; qui si tengono solo per ripubblicarle.
     /// Interruttore: la registrazione dei comandi multimediali non rallentava l'avvio (la causa era la lettura della libreria),
@@ -246,6 +257,9 @@ final class PlayerService: NSObject, ObservableObject {
         currentTime = 0
         duration = knownDuration ?? 0
         isPlaying = true
+        previewEnd = nil
+        previewApplied = false
+        if previewMode, let known = knownDuration, known > 0 { startPreview(duration: known) }
         startTimer()
         publishNowPlaying()
         if knownDuration == nil {
@@ -253,10 +267,23 @@ final class PlayerService: NSObject, ObservableObject {
             Task { @MainActor in
                 if let d = try? await item.asset.load(.duration), d.isNumeric, self.currentItem === item {
                     self.duration = d.seconds
+                    if self.previewMode, !self.previewApplied { self.startPreview(duration: d.seconds) }
                     self.publishNowPlaying()
                 }
             }
         }
+    }
+
+    /// Salto al 30 % e fine dell'anteprima 15 s dopo. Salto veloce (tolleranze predefinite): a un'anteprima non serve il
+    /// punto esatto, e con file di rete o VBR il salto preciso costa letture in più.
+    private func startPreview(duration d: TimeInterval) {
+        previewApplied = true
+        guard d > Self.previewLength + 1 else { return }
+        let start = min(d * Self.previewStartFraction, d - Self.previewLength)
+        routePlayer.seek(to: CMTime(seconds: start, preferredTimescale: 600))
+        currentTime = start
+        let end = start + Self.previewLength
+        previewEnd = end < d - 0.5 ? end : nil   // se coincide con la fine, basta il termine naturale del brano
     }
 
     func togglePlayPause() {
@@ -274,6 +301,7 @@ final class PlayerService: NSObject, ObservableObject {
     /// Scorrimento manuale della posizione (slider di avanzamento nel mini player).
     func seek(to time: TimeInterval) {
         guard currentItem != nil else { return }
+        previewEnd = nil   // chi sposta il cursore a mano prende il controllo: il brano prosegue
         let clamped = duration > 0 ? min(max(0, time), duration) : max(0, time)
         routePlayer.seek(to: CMTime(seconds: clamped, preferredTimescale: 600),
                          toleranceBefore: .zero, toleranceAfter: .zero)
@@ -283,6 +311,7 @@ final class PlayerService: NSObject, ObservableObject {
 
     func stop() {
         generation &+= 1
+        previewEnd = nil
         timer?.invalidate()
         timer = nil
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
@@ -376,6 +405,11 @@ final class PlayerService: NSObject, ObservableObject {
                 guard let self else { return }
                 let t = self.routePlayer.currentTime().seconds
                 self.currentTime = t.isFinite ? t : 0
+                if let end = self.previewEnd, t.isFinite, t >= end {
+                    self.previewEnd = nil
+                    self.isPlaying = false
+                    self.onFinished?()
+                }
             }
         }
     }

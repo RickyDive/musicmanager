@@ -15,6 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import SwiftUI
+import AppKit
 
 extension View {
     /// Liquid Glass (macOS 26): un pannello di vetro in alto e uno in basso **sovrapposti** all'elenco,
@@ -142,6 +143,8 @@ struct GlassInsetRow: View {
 /// Intensità del velo sfocato dietro il vetro `.clear` del pannello alto (0…1): regola l'equilibrio tra trasparenza e leggibilità.
 private let glassTopVeil: Double = 0.5
 
+private let glassBottomGap: CGFloat = 2   //: stacco della capsula bassa dal bordo inferiore, uguale a quello alto (prima 10: nella fascia sotto la capsula si vedevano e si selezionavano le righe)
+
 private let glassTopGap: CGFloat = 2   //: 2 pt di stacco dalla barra del titolo, così gli angoli alti della capsula si vedono interi (prima 0)
 
 private struct GlassBarsModifier<TopBar: View, BottomBar: View>: ViewModifier {
@@ -177,10 +180,14 @@ private struct GlassBarsModifier<TopBar: View, BottomBar: View>: ViewModifier {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: glassTopGap)
                     Color.black
+                    Color.clear.frame(height: glassBottomGap)
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { paneWidth = $0 }
             .environment(\.glassInsets, GlassInsets(top: topHeight, bottom: bottomHeight))
+            // La barra di scorrimento delle liste già create (le Playlist, la prima scheda, nascono quando i pannelli non sono ancora
+            // stati misurati) non seguiva i margini: occupava tutta l'altezza, anche sotto il player. Qui li imposta AppKit.
+            .background(ScrollerInsetsApplier(top: topHeight, bottom: bottomHeight))
             .contentMargins(.top, topHeight, for: .scrollIndicators)
             .contentMargins(.bottom, bottomHeight, for: .scrollIndicators)
             .overlay(alignment: .top) {
@@ -217,8 +224,16 @@ private struct GlassBarsModifier<TopBar: View, BottomBar: View>: ViewModifier {
                 // Capsula staccata: margine ai lati e in basso.
                 .padding(.horizontal, 8)
                 .padding(.top, 4)
-                .padding(.bottom, 10)
+                .padding(.bottom, glassBottomGap)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bottomHeight = $0 }
+            }
+            // Le due fasce sottili (sopra la capsula alta e sotto la bassa) sono mascherate: assorbono anche i clic,
+            // così non si selezionano righe nell'area scoperta.
+            .overlay(alignment: .top) {
+                Color.clear.frame(height: glassTopGap).contentShape(Rectangle()).onTapGesture {}
+            }
+            .overlay(alignment: .bottom) {
+                Color.clear.frame(height: glassBottomGap).contentShape(Rectangle()).onTapGesture {}
             }
             .clipped()
     }
@@ -300,5 +315,97 @@ struct TwoLineHint: View {
             if parts.count > 1 { Text(parts[1]).font(.subheadline) }
         }
         .foregroundStyle(.secondary)
+    }
+}
+
+/// Imposta i margini della barra di scorrimento (`scrollerInsets`) di tutte le liste del pannello: il cursore resta tra il pannello
+/// alto e quello basso. SwiftUI non li applica alle liste create all'avvio, e può riportarli a zero quando una lista cambia, quindi
+/// si ricontrolla ogni secondo e si corregge solo se serve. Il registro dettagliato riporta le liste trovate e ogni correzione
+/// (diagnosi, da togliere a cosa fatta).
+private struct ScrollerInsetsApplier: NSViewRepresentable {
+    let top: CGFloat
+    let bottom: CGFloat
+
+    /// SwiftUI riporta `scrollerInsets` a zero ad ogni suo passaggio sulla tabella: invece di riscriverli a intervalli
+    /// (la barra saltava), si osserva la proprietà e si ripristinano subito, nello stesso ciclo, i margini richiesti.
+    @MainActor
+    final class Coordinator {
+        var top: CGFloat = 0
+        var bottom: CGFloat = 0
+        weak var view: NSView?
+        var timer: Timer?
+        var observations: [ObjectIdentifier: (scroll: Weak<NSScrollView>, token: NSKeyValueObservation)] = [:]
+        var reapplying = false
+
+        final class Weak<T: AnyObject> { weak var value: T?; init(_ v: T) { value = v } }
+
+        var insets: NSEdgeInsets { NSEdgeInsets(top: top, left: 0, bottom: bottom, right: 0) }
+
+        func start() {
+            guard timer == nil else { return }
+            // Solo per trovare le tabelle create più tardi; i margini li mantiene l'osservatore.
+            timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.tick() }
+            }
+        }
+
+        func enforce(_ scroll: NSScrollView) {
+            guard !reapplying, top > 0 || bottom > 0 else { return }
+            let want = insets
+            let cur = scroll.scrollerInsets
+            guard cur.top != want.top || cur.bottom != want.bottom else { return }
+            reapplying = true
+            scroll.scrollerInsets = want
+            reapplying = false
+        }
+
+        func tick() {
+            guard top > 0 || bottom > 0, let view, let root = view.window?.contentView else { return }
+            observations = observations.filter { $0.value.scroll.value != nil }
+            let area = view.convert(view.bounds, to: nil)
+            attach(in: root, area: area)
+        }
+
+        private func attach(in view: NSView, area: NSRect) {
+            for sub in view.subviews {
+                if let scroll = sub as? NSScrollView, scroll.documentView is NSTableView {
+                    let frame = scroll.convert(scroll.bounds, to: nil)
+                    guard area.contains(NSPoint(x: frame.midX, y: frame.midY)) else { continue }
+                    let id = ObjectIdentifier(scroll)
+                    if observations[id] == nil {
+                        let token = scroll.observe(\.scrollerInsets, options: [.new]) { [weak self] s, _ in
+                            MainActor.assumeIsolated { self?.enforce(s) }
+                        }
+                        observations[id] = (Weak(scroll), token)
+                    }
+                    enforce(scroll)
+                } else {
+                    attach(in: sub, area: area)
+                }
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        context.coordinator.view = v
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let c = context.coordinator
+        c.view = nsView
+        c.top = top
+        c.bottom = bottom
+        c.start()
+        Task { @MainActor [weak c] in c?.tick() }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.timer?.invalidate()
+        coordinator.timer = nil
+        coordinator.observations.removeAll()
     }
 }

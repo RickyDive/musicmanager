@@ -522,6 +522,8 @@ struct FixArtworkView: View {
 
                 artworkColumn(title: t("fix_artwork_online")) {
                     onlineContent
+                        // Prima la misura fissa del riquadro, poi le frecce: così stanno sempre agli stessi punti, qualunque sia la forma dell'immagine.
+                        .frame(width: artworkSize, height: artworkSize)
                         .overlay { candidateArrows }
                         .overlay {
                             if dropTargeted {
@@ -703,26 +705,35 @@ struct FixArtworkView: View {
         if session.candidateCount > 1 {
             let before = session.candidateIndex
             let after = session.candidateCount - 1 - session.candidateIndex
-            HStack {
-                if before > 0 {
-                    arrowButton(before == 1 ? "chevron.left" : "chevron.left.2") { session.previousCandidate() }
-                }
+            // Due posti fissi (sinistra e destra, sempre della stessa misura): quando una direzione non ha più copertine il posto resta
+            // vuoto, così l'altra freccia non si sposta e si può cliccare più volte senza muovere il mouse.
+            HStack(spacing: 0) {
+                arrowSlot(before > 0 ? (before == 1 ? "chevron.left" : "chevron.left.2") : nil) { session.previousCandidate() }
                 Spacer(minLength: 0)
-                if after > 0 {
-                    arrowButton(after == 1 ? "chevron.right" : "chevron.right.2") { session.nextCandidate() }
-                }
+                arrowSlot(after > 0 ? (after == 1 ? "chevron.right" : "chevron.right.2") : nil) { session.nextCandidate() }
             }
             .padding(6)
         }
     }
 
+    private static let arrowSlotSize: CGFloat = 26
+
+    @ViewBuilder
+    private func arrowSlot(_ symbol: String?, action: @escaping () -> Void) -> some View {
+        if let symbol { arrowButton(symbol, action: action) }
+        else { Color.clear.frame(width: Self.arrowSlotSize, height: Self.arrowSlotSize) }
+    }
+
     private func arrowButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        // Il chevron doppio è più largo del singolo: due punti in meno perché il disegno resti della stessa dimensione.
+        let isDouble = symbol.hasSuffix(".2")
+        return Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: isDouble ? 11 : 13, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
+                .frame(width: Self.arrowSlotSize, height: Self.arrowSlotSize)
                 .background(Circle().fill(Color.black.opacity(0.45)))
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
     }

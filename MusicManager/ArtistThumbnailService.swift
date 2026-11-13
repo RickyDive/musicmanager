@@ -65,7 +65,8 @@ actor ArtistThumbnailService {
 
     private let session: URLSession
     private let cacheDir: URL
-    private let country = "it"
+    /// Mercato scelto in Impostazioni ▸ Artwork (o regione del Mac): lo stesso delle ricerche di copertine.
+    private var country: String { ArtworkStore.primary.lowercased() }
 
     /// Artisti senza miniatura per un errore in questa sessione (immagine non scaricabile): si riprova dopo un'ora.
     private var misses: [String: Date] = [:]
@@ -93,7 +94,7 @@ actor ArtistThumbnailService {
         self.session = session
         cacheDir = AppFolders.artistsMiniature
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        loadNotFound()
+        notFound = Self.readNotFound(file: notFoundFile, days: notFoundDays)
     }
 
     // MARK: - Interfaccia
@@ -283,11 +284,13 @@ actor ArtistThumbnailService {
 
     // MARK: - «Non trovati» su disco
 
-    private func loadNotFound() {
-        guard let data = try? Data(contentsOf: notFoundFile),
-              let stored = try? JSONDecoder().decode([String: Double].self, from: data) else { return }
-        let limit = Date().addingTimeInterval(-notFoundDays * 86_400)
-        notFound = stored.mapValues { Date(timeIntervalSince1970: $0) }.filter { $0.value > limit }
+    /// Legge dal disco gli artisti «non trovati» ancora validi. È statica: chiamata da `init` (contesto non isolato dell'actor)
+    /// non può usare un metodo dell'actor (avviso di Swift, errore nella modalità Swift 6).
+    private static func readNotFound(file: URL, days: Double) -> [String: Date] {
+        guard let data = try? Data(contentsOf: file),
+              let stored = try? JSONDecoder().decode([String: Double].self, from: data) else { return [:] }
+        let limit = Date().addingTimeInterval(-days * 86_400)
+        return stored.mapValues { Date(timeIntervalSince1970: $0) }.filter { $0.value > limit }
     }
 
     private func saveNotFound() {

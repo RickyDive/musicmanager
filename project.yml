@@ -57,8 +57,8 @@ targets:
       properties:
         CFBundleName: Music Manager
         CFBundleDisplayName: Music Manager
-        CFBundleShortVersionString: "2.3"
-        CFBundleVersion: "48"
+        CFBundleShortVersionString: "2.5"
+        CFBundleVersion: "50"
         LSMinimumSystemVersion: "26.0"
         LSApplicationCategoryType: public.app-category.utilities
         NSPrincipalClass: NSApplication

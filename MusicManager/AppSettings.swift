@@ -149,6 +149,13 @@ final class AppSettings: ObservableObject {
         var softwareUpToDate: Bool? = nil
         /// Immagine del prodotto scelta a mano dall'utente (indirizzo dell'elenco Garmin); nil = automatica.
         var imageURL: String? = nil
+        /// Canale con cui il server Garmin ha proposto ciascuna versione del software di sistema (`releaseState`: «live»,
+        /// «public_beta»…), registrato a ogni controllo. Serve a sapere, a versione installata, da quale canale viene (il
+        /// `GarminDevice.xml` non lo dice). Chiave = versione come in «Software Version» («7.15»). Si tengono le ultime 8.
+        var releaseChannels: [String: String]? = nil
+        /// Dispositivo iscritto al programma Garmin Beta: l'ultimo controllo ha visto una versione beta proposta oppure la versione
+        /// installata viene dal canale beta. nil = non ancora valutato (si ricava allora da `releaseChannels`).
+        var betaEnrolled: Bool? = nil
     }
 
     /// Global ID dei dispositivi collegati in questo momento (via MTP o come volume); lo aggiorna `AppViewModel`.
@@ -159,7 +166,7 @@ final class AppSettings: ObservableObject {
     @Published var knownDevices: [KnownDevice] {
         didSet {
             if let data = try? JSONEncoder().encode(knownDevices) {
-                UserDefaults.standard.set(data, forKey: Self.knownDevicesKey)
+                ProfileDefaults.shared.set(data, forKey: Self.knownDevicesKey)
             }
         }
     }
@@ -183,8 +190,8 @@ final class AppSettings: ObservableObject {
         return true
     }
 
-    /// Le mappe Garmin escono circa ogni 3 mesi: dopo tanti giorni dall'ultimo controllo se ne propone uno nuovo.
-    nonisolated static let mapsRecheckDays = 90
+    /// Garmin pubblica nuove mappe a più riprese (2.4 Internal: 30 giorni, prima 90): dopo tanti giorni dall'ultimo controllo se ne propone uno nuovo.
+    nonisolated static let mapsRecheckDays = 30
 
     /// Giorni trascorsi dall'ultimo controllo delle mappe (nil se non c'è un Maps.json leggibile).
     func daysSinceMapsCheck(forDevice id: String) -> Int? {
@@ -213,6 +220,31 @@ final class AppSettings: ObservableObject {
     func setHasMaps(_ value: Bool, forDevice id: String) {
         guard let i = knownDevices.firstIndex(where: { $0.id == id }), knownDevices[i].hasMaps != value else { return }
         knownDevices[i].hasMaps = value
+    }
+
+    /// Registra i canali delle versioni proposte dal server (ultimo valore visto per ogni versione).
+    func noteReleaseChannels(_ releases: [(version: String, state: String)], forDevice id: String) {
+        guard let i = knownDevices.firstIndex(where: { $0.id == id }) else { return }
+        var map = knownDevices[i].releaseChannels ?? [:]
+        let before = map
+        for r in releases where !r.version.isEmpty { map[r.version] = r.state.lowercased() }
+        while map.count > 8, let oldest = map.keys.min(by: { $0.compare($1, options: .numeric) == .orderedAscending }) { map[oldest] = nil }
+        if map != before { knownDevices[i].releaseChannels = map }
+        let installedBeta = map[knownDevices[i].softwareVersion]?.contains("beta") == true
+        let enrolled = installedBeta || releases.contains { $0.state.lowercased().contains("beta") }
+        if knownDevices[i].betaEnrolled != enrolled { knownDevices[i].betaEnrolled = enrolled }
+    }
+
+    /// Il dispositivo riceve le versioni beta (programma Garmin Beta)? Serve a mostrare nello storico delle novità anche le beta.
+    func isBetaEnrolled(forDevice id: String?) -> Bool {
+        guard let id, let d = knownDevices.first(where: { $0.id == id }) else { return false }
+        return d.betaEnrolled ?? (d.releaseChannels?.values.contains { $0.contains("beta") } ?? false)
+    }
+
+    /// Canale con cui è stata proposta quella versione (nil = mai vista in un controllo).
+    func releaseChannel(forDevice id: String?, version: String?) -> String? {
+        guard let id, let version else { return nil }
+        return knownDevices.first { $0.id == id }?.releaseChannels?[version]
     }
 
     func setSoftwareUpToDate(_ value: Bool, forDevice id: String) {
@@ -252,31 +284,31 @@ final class AppSettings: ObservableObject {
 
     /// Predefinito di «mostra solo i brani trasferibili» nel pannello Apple Music (acceso se non è mai stato scelto).
     @Published var showOnlyTransferable: Bool {
-        didSet { UserDefaults.standard.set(showOnlyTransferable, forKey: Self.showOnlyTransferableKey) }
+        didSet { ProfileDefaults.shared.set(showOnlyTransferable, forKey: Self.showOnlyTransferableKey) }
     }
 
     /// Controllo della disponibilità di un aggiornamento software del dispositivo sui server Garmin, una sola volta
     /// per avvio dell'app. Spento di default: invia a Garmin il contenuto di GarminDevice.xml (vedi `GarminUpdateService`).
     @Published var checkDeviceUpdates: Bool {
-        didSet { UserDefaults.standard.set(checkDeviceUpdates, forKey: Self.checkDeviceUpdatesKey) }
+        didSet { ProfileDefaults.shared.set(checkDeviceUpdates, forKey: Self.checkDeviceUpdatesKey) }
     }
 
     /// Mostra il pulsante del file manager del dispositivo (navigatore dei file in sola lettura, 2.1 Beta 3). Spento di default (si attiva in Impostazioni ▸ Avanzate).
     @Published var showDeviceFileManager: Bool {
-        didSet { UserDefaults.standard.set(showDeviceFileManager, forKey: Self.showDeviceFileManagerKey) }
+        didSet { ProfileDefaults.shared.set(showDeviceFileManager, forKey: Self.showDeviceFileManagerKey) }
     }
 
     /// Gestione della musica sui dispositivi visti come disco (archiviazione di massa, scheda SD, immagine disco): accanto a
     /// «Espelli» compare «Connetti», che apre il volume come un dispositivo (2.1 Beta 3, sperimentale). Spento di default.
     @Published var manageMusicOnVolumes: Bool {
-        didSet { UserDefaults.standard.set(manageMusicOnVolumes, forKey: Self.manageMusicOnVolumesKey) }
+        didSet { ProfileDefaults.shared.set(manageMusicOnVolumes, forKey: Self.manageMusicOnVolumesKey) }
     }
 
     /// AirPlay «come audio» (2.1 Beta 3, sperimentale): il player non usa la «riproduzione esterna» (l'Apple TV riceve il file e lo
     /// riproduce da sé) ma manda l'audio al dispositivo come fa con un ampli AirPlay. Serve a provare se così il volume dell'Apple TV
     /// resta regolabile (il cursore del pannello AirPlay di sistema sparisce con la riproduzione esterna). Acceso di default (2.1 Beta 3).
     @Published var airPlayAsAudio: Bool {
-        didSet { UserDefaults.standard.set(airPlayAsAudio, forKey: Self.airPlayAsAudioKey) }
+        didSet { ProfileDefaults.shared.set(airPlayAsAudio, forKey: Self.airPlayAsAudioKey) }
     }
 
     /// Chiede conferma prima di aggiungere brani alla libreria di Music (file trascinati dal Finder, brani di una libreria esterna
@@ -284,13 +316,13 @@ final class AppSettings: ObservableObject {
     /// Montaggio automatico all'avvio dei volumi di rete delle librerie remote. Spento di default: con reti lente o assenti
     /// appesantisce la partenza; spento, all'avvio si fa solo un sondaggio leggero e il volume si monta alla scelta della libreria.
     @Published var mountRemoteLibrariesAtLaunch: Bool {
-        didSet { UserDefaults.standard.set(mountRemoteLibrariesAtLaunch, forKey: Self.mountRemoteAtLaunchKey) }
+        didSet { ProfileDefaults.shared.set(mountRemoteLibrariesAtLaunch, forKey: Self.mountRemoteAtLaunchKey) }
     }
 
     /// Colore dell'interfaccia (2.3 Beta 2): spento = segue il colore d'accento di Sistema; acceso = selettori, pulsanti principali
     /// e icone attive usano il colore scelto per le righe selezionate, a piena opacità.
     @Published var interfaceFollowsSelection: Bool {
-        didSet { UserDefaults.standard.set(interfaceFollowsSelection, forKey: Self.interfaceFollowsSelectionKey) }
+        didSet { ProfileDefaults.shared.set(interfaceFollowsSelection, forKey: Self.interfaceFollowsSelectionKey) }
     }
 
     /// Accento da applicare con `.tint(...)` (nil = Sistema).
@@ -305,16 +337,17 @@ final class AppSettings: ObservableObject {
     var accentColor: Color { interfaceTint ?? Color.accentColor }
 
     @Published var confirmBeforeMusicChanges: Bool {
-        didSet { UserDefaults.standard.set(confirmBeforeMusicChanges, forKey: Self.confirmMusicChangesKey) }
+        didSet { ProfileDefaults.shared.set(confirmBeforeMusicChanges, forKey: Self.confirmMusicChangesKey) }
     }
 
     /// Registro dettagliato (2.1 Beta 3): oltre agli eventi di sempre scrive le righe di diagnostica (`AppLog.debug`), per esempio
     /// i dettagli del volume AirPlay o dei volumi usati come dispositivo. Spento di default; il file resta sul Mac.
     @Published var detailedLog: Bool {
         didSet {
-            UserDefaults.standard.set(detailedLog, forKey: Self.detailedLogKey)
+            ProfileDefaults.shared.set(detailedLog, forKey: Self.detailedLogKey)
             AppLog.detailed = detailedLog
-            AppLog.write("Log level: " + (detailedLog ? "detailed" : "normal"), force: true)
+            // Solo se cambia davvero: il cambio di utente riassegna il valore e riscriveva la riga a ogni passaggio.
+            if oldValue != detailedLog { AppLog.write("Log level: " + (detailedLog ? "detailed" : "normal"), force: true) }
         }
     }
 
@@ -322,6 +355,7 @@ final class AppSettings: ObservableObject {
     /// richiesta alla volta, utile se Music rallenta durante la lettura). Altri valori salvati prima tornano a 8.
     nonisolated static let libraryReadThreadsKey = "library_read_threads"
     @Published var libraryReadThreads: Int {
+        // Globale: la legge anche MusicLibraryService.
         didSet { UserDefaults.standard.set(libraryReadThreads, forKey: Self.libraryReadThreadsKey) }
     }
 
@@ -356,33 +390,37 @@ final class AppSettings: ObservableObject {
     }
 
     @Published var listTextSize: ListTextSize {
-        didSet { UserDefaults.standard.set(listTextSize.rawValue, forKey: Self.listTextSizeKey) }
+        didSet { ProfileDefaults.shared.set(listTextSize.rawValue, forKey: Self.listTextSizeKey) }
     }
 
     /// 2.3 Beta 2: nella Custom Playlist la riga principale mostra l'artista e la piccola titolo e album (per vedere i doppioni).
     @Published var customArtistFirst: Bool {
-        didSet { UserDefaults.standard.set(customArtistFirst, forKey: Self.customArtistFirstKey) }
+        didSet { ProfileDefaults.shared.set(customArtistFirst, forKey: Self.customArtistFirstKey) }
     }
 
     @Published var albumOrder: AlbumOrder {
-        didSet { UserDefaults.standard.set(albumOrder.rawValue, forKey: Self.albumOrderKey) }
+        didSet { ProfileDefaults.shared.set(albumOrder.rawValue, forKey: Self.albumOrderKey) }
     }
 
     @Published var playlistTypeFilter: PlaylistTypeFilter {
-        didSet { UserDefaults.standard.set(playlistTypeFilter.rawValue, forKey: Self.playlistTypeFilterKey) }
+        didSet { ProfileDefaults.shared.set(playlistTypeFilter.rawValue, forKey: Self.playlistTypeFilterKey) }
     }
 
-    static let maxDriveLibraries = 3
+    /// Limite complessivo delle sorgenti esterne (remote + unità) nella tabella unica delle Impostazioni.
+    static let maxExternalSources = 5
+    static let maxDriveLibraries = 5
     private static let driveLibrariesKey = "drive_libraries"
 
     /// Librerie «Unità esterna» (2.2). Tolta una libreria si cancella anche il suo indice.
     @Published var driveLibraries: [DriveLibraryConfig] {
         didSet {
-            for removed in oldValue where !driveLibraries.contains(where: { $0.id == removed.id }) {
-                DriveLibraryService.removeIndex(removed.id)
+            if !isReloadingProfile {
+                for removed in oldValue where !driveLibraries.contains(where: { $0.id == removed.id }) {
+                    DriveLibraryService.removeIndex(removed.id)
+                }
             }
             if let data = try? JSONEncoder().encode(driveLibraries) {
-                UserDefaults.standard.set(data, forKey: Self.driveLibrariesKey)
+                ProfileDefaults.shared.set(data, forKey: Self.driveLibrariesKey)
             }
         }
     }
@@ -393,19 +431,25 @@ final class AppSettings: ObservableObject {
         change(&driveLibraries[i])
     }
 
-    static let maxRemoteLibraries = 3
+    static let maxRemoteLibraries = 5
     private static let remoteLibrariesKey = "remote_libraries"
+
+    /// Vero mentre `reloadForProfile()` sostituisce le impostazioni con quelle di un altro utente: l'elenco delle librerie cambia
+    /// perché cambia utente, non perché una libreria sia stata tolta, e le copie salvate non vanno cancellate.
+    private var isReloadingProfile = false
 
     @Published var remoteLibraries: [RemoteLibraryConfig] {
         didSet {
             // Libreria tolta: si cancella anche la sua copia compatta in «External Library» (salvo se un'altra libreria
-            // usa lo stesso file XML).
+            // usa lo stesso file XML). Non nel cambio di utente: le librerie dell'altro utente restano com'erano.
             let remaining = Set(remoteLibraries.map(\.path))
-            for removed in oldValue where !remoteLibraries.contains(where: { $0.id == removed.id }) && !remaining.contains(removed.path) {
-                ExternalParsed.removeCache(forXMLPath: removed.path)
+            if !isReloadingProfile {
+                for removed in oldValue where !remoteLibraries.contains(where: { $0.id == removed.id }) && !remaining.contains(removed.path) {
+                    ExternalParsed.removeCache(forXMLPath: removed.path, key: removed.id.uuidString)
+                }
             }
             if let data = try? JSONEncoder().encode(remoteLibraries) {
-                UserDefaults.standard.set(data, forKey: Self.remoteLibrariesKey)
+                ProfileDefaults.shared.set(data, forKey: Self.remoteLibrariesKey)
             }
         }
     }
@@ -504,7 +548,7 @@ final class AppSettings: ObservableObject {
     private static let generalKey = "general_settings_profile"
 
     private static func loadGeneralProfile() -> Profile {
-        guard let data = UserDefaults.standard.data(forKey: generalKey),
+        guard let data = ProfileDefaults.shared.data(forKey: generalKey),
               let profile = try? JSONDecoder().decode(Profile.self, from: data) else { return .defaults }
         return profile
     }
@@ -584,6 +628,12 @@ final class AppSettings: ObservableObject {
         didSet { saveActiveProfile() }
     }
 
+    /// Mercato (paese dello store di Apple) per le ricerche online di copertine e miniature: "" = automatico (regione del Mac).
+    /// **Globale, non per utente**: le copertine in cache sono comuni a tutti gli utenti e non devono mescolare mercati diversi.
+    @Published var artworkStoreCountry: String = UserDefaults.standard.string(forKey: ArtworkStore.defaultsKey) ?? "" {
+        didSet { UserDefaults.standard.set(artworkStoreCountry, forKey: ArtworkStore.defaultsKey) }
+    }
+
     /// Opacità predefinita dello sfondo della finestra principale.
     nonisolated static let defaultWindowOpacity = 0.45
 
@@ -600,7 +650,7 @@ final class AppSettings: ObservableObject {
         // Lingua: si imposta l'archivio globale (non il wrapper, che richiamerebbe `shared` durante l'init).
         LocalizationStore.language = AppLanguage(rawValue: d.language) ?? .systemDefault
         LocalizationStore.applySystemMenuLanguage()
-        UserDefaults.standard.removeObject(forKey: Self.obsoleteProfilesKey)   // i profili per dispositivo non esistono più
+        ProfileDefaults.shared.removeObject(forKey: Self.obsoleteProfilesKey)   // i profili per dispositivo non esistono più
         appearance = Appearance(rawValue: d.appearance) ?? .system
         defaultCategory = CatalogCategory(rawValue: d.defaultCategory) ?? .playlists
         highlightColor = Color(hex: d.highlightColor) ?? Color.accentColor.opacity(0.35)
@@ -608,40 +658,147 @@ final class AppSettings: ObservableObject {
         windowOpacity = d.windowOpacity ?? Self.defaultWindowOpacity
         autoLoadAppleArtwork = d.autoLoadAppleArtwork ?? true
         proposeSharedArtworkSearch = d.proposeSharedArtworkSearch ?? true
-        playlistTypeFilter = PlaylistTypeFilter(rawValue: UserDefaults.standard.string(forKey: Self.playlistTypeFilterKey) ?? "") ?? .all
-        customArtistFirst = UserDefaults.standard.object(forKey: Self.customArtistFirstKey) as? Bool ?? false
-        albumOrder = AlbumOrder(rawValue: UserDefaults.standard.string(forKey: Self.albumOrderKey) ?? "") ?? .alphabetical
-        showOnlyTransferable = UserDefaults.standard.object(forKey: Self.showOnlyTransferableKey) as? Bool ?? true
-        checkDeviceUpdates = UserDefaults.standard.object(forKey: Self.checkDeviceUpdatesKey) as? Bool ?? false
-        showDeviceFileManager = UserDefaults.standard.object(forKey: Self.showDeviceFileManagerKey) as? Bool ?? false
-        manageMusicOnVolumes = UserDefaults.standard.object(forKey: Self.manageMusicOnVolumesKey) as? Bool ?? false
-        airPlayAsAudio = UserDefaults.standard.object(forKey: Self.airPlayAsAudioKey) as? Bool ?? true
-        confirmBeforeMusicChanges = UserDefaults.standard.object(forKey: Self.confirmMusicChangesKey) as? Bool ?? true
-        interfaceFollowsSelection = UserDefaults.standard.object(forKey: Self.interfaceFollowsSelectionKey) as? Bool ?? false
-        mountRemoteLibrariesAtLaunch = UserDefaults.standard.object(forKey: Self.mountRemoteAtLaunchKey) as? Bool ?? false
+        playlistTypeFilter = PlaylistTypeFilter(rawValue: ProfileDefaults.shared.string(forKey: Self.playlistTypeFilterKey) ?? "") ?? .all
+        customArtistFirst = ProfileDefaults.shared.object(forKey: Self.customArtistFirstKey) as? Bool ?? false
+        albumOrder = AlbumOrder(rawValue: ProfileDefaults.shared.string(forKey: Self.albumOrderKey) ?? "") ?? .alphabetical
+        showOnlyTransferable = ProfileDefaults.shared.object(forKey: Self.showOnlyTransferableKey) as? Bool ?? true
+        checkDeviceUpdates = ProfileDefaults.shared.object(forKey: Self.checkDeviceUpdatesKey) as? Bool ?? false
+        showDeviceFileManager = ProfileDefaults.shared.object(forKey: Self.showDeviceFileManagerKey) as? Bool ?? false
+        manageMusicOnVolumes = ProfileDefaults.shared.object(forKey: Self.manageMusicOnVolumesKey) as? Bool ?? false
+        airPlayAsAudio = ProfileDefaults.shared.object(forKey: Self.airPlayAsAudioKey) as? Bool ?? true
+        confirmBeforeMusicChanges = ProfileDefaults.shared.object(forKey: Self.confirmMusicChangesKey) as? Bool ?? true
+        interfaceFollowsSelection = ProfileDefaults.shared.object(forKey: Self.interfaceFollowsSelectionKey) as? Bool ?? false
+        mountRemoteLibrariesAtLaunch = ProfileDefaults.shared.object(forKey: Self.mountRemoteAtLaunchKey) as? Bool ?? false
         libraryReadThreads = (UserDefaults.standard.object(forKey: Self.libraryReadThreadsKey) as? Int) == 1 ? 1 : 8
-        let savedDetailedLog = UserDefaults.standard.object(forKey: Self.detailedLogKey) as? Bool ?? false
+        let savedDetailedLog = ProfileDefaults.shared.object(forKey: Self.detailedLogKey) as? Bool ?? false
         detailedLog = savedDetailedLog
         AppLog.detailed = savedDetailedLog
-        listTextSize = (UserDefaults.standard.object(forKey: Self.listTextSizeKey) as? Int).flatMap(ListTextSize.init(rawValue:)) ?? .medium
-        if let data = UserDefaults.standard.data(forKey: Self.knownDevicesKey),
+        listTextSize = (ProfileDefaults.shared.object(forKey: Self.listTextSizeKey) as? Int).flatMap(ListTextSize.init(rawValue:)) ?? .medium
+        if let data = ProfileDefaults.shared.data(forKey: Self.knownDevicesKey),
            let saved = try? JSONDecoder().decode([KnownDevice].self, from: data) {
             knownDevices = saved
         } else {
             knownDevices = []
         }
-        if let data = UserDefaults.standard.data(forKey: Self.remoteLibrariesKey),
+        if let data = ProfileDefaults.shared.data(forKey: Self.remoteLibrariesKey),
            let saved = try? JSONDecoder().decode([RemoteLibraryConfig].self, from: data) {
             remoteLibraries = Array(saved.prefix(Self.maxRemoteLibraries))
         } else {
             remoteLibraries = []
         }
-        if let data = UserDefaults.standard.data(forKey: Self.driveLibrariesKey),
+        if let data = ProfileDefaults.shared.data(forKey: Self.driveLibrariesKey),
            let saved = try? JSONDecoder().decode([DriveLibraryConfig].self, from: data) {
             driveLibraries = Array(saved.prefix(Self.maxDriveLibraries))
         } else {
             driveLibraries = []
         }
+    }
+
+    // MARK: Profili utente (2.4)
+
+    /// Chiavi dell'utente attivo (le stesse che `ProfileDefaults` prefigge): servono a cancellarle con l'utente.
+    /// `libraryReadThreadsKey` resta globale (la legge anche `MusicLibraryService`).
+    static let perUserKeys: [String] = [
+        albumOrderKey, playlistTypeFilterKey, customArtistFirstKey, showOnlyTransferableKey, checkDeviceUpdatesKey,
+        showDeviceFileManagerKey, manageMusicOnVolumesKey, interfaceFollowsSelectionKey, detailedLogKey, airPlayAsAudioKey,
+        confirmMusicChangesKey, mountRemoteAtLaunchKey, listTextSizeKey, knownDevicesKey, driveLibrariesKey,
+        remoteLibrariesKey, generalKey
+    ]
+
+    /// Dispositivi memorizzati da un altro utente (per riconoscere un Garmin che appartiene a lui).
+    static func knownDevices(forPrefix prefix: String) -> [KnownDevice] {
+        guard let data = ProfileDefaults.data(forKey: knownDevicesKey, prefix: prefix),
+              let list = try? JSONDecoder().decode([KnownDevice].self, from: data) else { return [] }
+        return list
+    }
+
+    /// Cambio utente: rilegge tutte le impostazioni con il prefisso del nuovo utente (chiavi assenti = valori predefiniti).
+    func reloadForProfile() {
+        isReloadingProfile = true
+        defer { isReloadingProfile = false }
+        let d = ProfileDefaults.shared
+        apply(Self.loadGeneralProfile())
+        playlistTypeFilter = PlaylistTypeFilter(rawValue: d.string(forKey: Self.playlistTypeFilterKey) ?? "") ?? .all
+        customArtistFirst = d.object(forKey: Self.customArtistFirstKey) as? Bool ?? false
+        albumOrder = AlbumOrder(rawValue: d.string(forKey: Self.albumOrderKey) ?? "") ?? .alphabetical
+        showOnlyTransferable = d.object(forKey: Self.showOnlyTransferableKey) as? Bool ?? true
+        checkDeviceUpdates = d.object(forKey: Self.checkDeviceUpdatesKey) as? Bool ?? false
+        showDeviceFileManager = d.object(forKey: Self.showDeviceFileManagerKey) as? Bool ?? false
+        manageMusicOnVolumes = d.object(forKey: Self.manageMusicOnVolumesKey) as? Bool ?? false
+        airPlayAsAudio = d.object(forKey: Self.airPlayAsAudioKey) as? Bool ?? true
+        confirmBeforeMusicChanges = d.object(forKey: Self.confirmMusicChangesKey) as? Bool ?? true
+        interfaceFollowsSelection = d.object(forKey: Self.interfaceFollowsSelectionKey) as? Bool ?? false
+        mountRemoteLibrariesAtLaunch = d.object(forKey: Self.mountRemoteAtLaunchKey) as? Bool ?? false
+        let savedDetailedLog = d.object(forKey: Self.detailedLogKey) as? Bool ?? false
+        detailedLog = savedDetailedLog
+        AppLog.detailed = savedDetailedLog
+        listTextSize = (d.object(forKey: Self.listTextSizeKey) as? Int).flatMap(ListTextSize.init(rawValue:)) ?? .medium
+        if let data = d.data(forKey: Self.knownDevicesKey),
+           let saved = try? JSONDecoder().decode([KnownDevice].self, from: data) { knownDevices = saved } else { knownDevices = [] }
+        if let data = d.data(forKey: Self.remoteLibrariesKey),
+           let saved = try? JSONDecoder().decode([RemoteLibraryConfig].self, from: data) {
+            remoteLibraries = Array(saved.prefix(Self.maxRemoteLibraries))
+        } else { remoteLibraries = [] }
+        if let data = d.data(forKey: Self.driveLibrariesKey),
+           let saved = try? JSONDecoder().decode([DriveLibraryConfig].self, from: data) {
+            driveLibraries = Array(saved.prefix(Self.maxDriveLibraries))
+        } else { driveLibraries = [] }
+    }
+
+    /// Nuovo utente «a partire da quello attuale»: con il prefisso già cambiato, riscrive i valori in memoria sotto le chiavi
+    /// del nuovo utente (impostazioni e librerie esterne; i dispositivi memorizzati no, partono vuoti).
+    /// Riassegna una proprietà a se stessa: il suo `didSet` riscrive il valore sotto le chiavi dell'utente attivo.
+    private func rewrite<T>(_ keyPath: ReferenceWritableKeyPath<AppSettings, T>) {
+        let value = self[keyPath: keyPath]
+        self[keyPath: keyPath] = value
+    }
+
+    /// Librerie esterne di un altro utente (per cancellare le sue copie quando lo si elimina).
+    static func remoteLibraries(forPrefix prefix: String) -> [RemoteLibraryConfig] {
+        guard let data = ProfileDefaults.data(forKey: remoteLibrariesKey, prefix: prefix),
+              let list = try? JSONDecoder().decode([RemoteLibraryConfig].self, from: data) else { return [] }
+        return list
+    }
+
+    static func driveLibraries(forPrefix prefix: String) -> [DriveLibraryConfig] {
+        guard let data = ProfileDefaults.data(forKey: driveLibrariesKey, prefix: prefix),
+              let list = try? JSONDecoder().decode([DriveLibraryConfig].self, from: data) else { return [] }
+        return list
+    }
+
+    /// Nuovo utente «a partire dall'utente attuale»: le librerie esterne si copiano solo come «intestazioni» (nome, indirizzo,
+    /// segnalibri) con un nuovo identificativo; la copia salvata di ogni libreria in rete si crea al primo accesso del nuovo utente
+    /// e quella dell'utente di prima non si tocca. Dell'indice di una cartella su unità si duplica il file (nessuna rete).
+    func copyCurrentToActiveProfile() {
+        isReloadingProfile = true
+        defer { isReloadingProfile = false }
+        saveActiveProfile()
+        remoteLibraries = remoteLibraries.map { var c = $0; c.id = UUID(); return c }
+        driveLibraries = driveLibraries.map { old in
+            var c = old
+            c.id = UUID()
+            if FileManager.default.fileExists(atPath: DriveLibraryService.indexURL(old.id).path) {
+                try? FileManager.default.removeItem(at: DriveLibraryService.indexURL(c.id))
+                try? FileManager.default.copyItem(at: DriveLibraryService.indexURL(old.id), to: DriveLibraryService.indexURL(c.id))
+            }
+            return c
+        }
+        rewrite(\.playlistTypeFilter)
+        rewrite(\.customArtistFirst)
+        rewrite(\.albumOrder)
+        rewrite(\.showOnlyTransferable)
+        rewrite(\.checkDeviceUpdates)
+        rewrite(\.showDeviceFileManager)
+        rewrite(\.manageMusicOnVolumes)
+        rewrite(\.airPlayAsAudio)
+        rewrite(\.confirmBeforeMusicChanges)
+        rewrite(\.interfaceFollowsSelection)
+        rewrite(\.mountRemoteLibrariesAtLaunch)
+        rewrite(\.detailedLog)
+        rewrite(\.listTextSize)
+        rewrite(\.remoteLibraries)
+        rewrite(\.driveLibraries)
+        knownDevices = []
     }
 
     // MARK: Impostazioni globali
@@ -675,7 +832,7 @@ final class AppSettings: ObservableObject {
     /// Riporta tutte le impostazioni ai valori predefiniti (lingua = quella del sistema). Non tocca le librerie
     /// condivise, i dispositivi memorizzati né la cache delle copertine.
     func resetAllSettings() {
-        UserDefaults.standard.removeObject(forKey: Self.generalKey)
+        ProfileDefaults.shared.removeObject(forKey: Self.generalKey)
         playlistTypeFilter = .all
         customArtistFirst = false
         albumOrder = .alphabetical
@@ -698,7 +855,7 @@ final class AppSettings: ObservableObject {
     func saveActiveProfile() {
         guard !isApplying else { return }
         if let data = try? JSONEncoder().encode(currentProfile) {
-            UserDefaults.standard.set(data, forKey: Self.generalKey)
+            ProfileDefaults.shared.set(data, forKey: Self.generalKey)
         }
     }
 }
@@ -766,7 +923,8 @@ final class LibraryReachability: ObservableObject {
     /// Di nuovo online: subito dopo il ritorno la rete non è ancora pronta (DNS, SMB), quindi la verifica si ripete a
     /// distanza (2, 5, 10, 20 s) finché tutte le librerie rispondono: prima ne risultava attiva solo qualcuna.
     func pathChanged(online: Bool) {
-        isOnline = online
+        AppLog.debug("Rete: \(online ? "online" : "offline") (verifica delle librerie condivise)")
+        if isOnline != online { isOnline = online }   // stesso valore: nessuna pubblicazione (ridisegnerebbe le liste)
         retryTask?.cancel()
         guard online else {
             var all: [UUID: Bool] = [:]
@@ -798,6 +956,13 @@ final class LibraryReachability: ObservableObject {
             for cfg in libraries { group.addTask { let r = await Self.check(cfg); return (cfg.id, r.0, r.1, r.2) } }
             for await (id, ok, text, isMounted) in group { result[id] = ok; texts[id] = text; mountedNow[id] = isMounted }
         }
+        // Registro dettagliato: ogni cambio di stato di una libreria, con la diagnosi della sonda (serve a capire perché una libreria
+        // risulti «non disponibile» al primo avvio: rete non ancora pronta, sonda scaduta, volume non montato).
+        for cfg in libraries where result[cfg.id] != reachable[cfg.id] || mountedNow[cfg.id] != mounted[cfg.id] {
+            let before = reachable[cfg.id].map { $0 ? "raggiungibile" : "non raggiungibile" } ?? "non verificata"
+            let after = result[cfg.id].map { $0 ? "raggiungibile" : "non raggiungibile" } ?? "non verificata"
+            AppLog.debug("Raggiungibilità «\(cfg.nickname)»: \(before) → \(after); montata: \(mountedNow[cfg.id] == true ? "sì" : "no"); \(texts[cfg.id] ?? "")")
+        }
         if mountedNow != mounted { mounted = mountedNow }
         if result != reachable { reachable = result }
         if texts != details { details = texts }
@@ -808,7 +973,17 @@ final class LibraryReachability: ObservableObject {
     /// utilizzabile (nome Bonjour, spazi) la libreria risultava «non raggiungibile» pur essendo montata.
     /// Restituisce anche un testo di diagnosi, mostrato nel tooltip dell'icona in Impostazioni.
     nonisolated private static func check(_ cfg: RemoteLibraryConfig) async -> (Bool, String, Bool) {
-        let fileOK = FileManager.default.fileExists(atPath: cfg.path)
+        // Due condivisioni con lo stesso nome («MacSSD» su Milano e su Mare) prendono punti di montaggio diversi a seconda
+        // dell'ordine (/Volumes/MacSSD, /Volumes/MacSSD-1): il percorso salvato può essere quello vecchio e il pallino restava
+        // «non montata» finché una lettura non lo aggiornava. Il segnalibro dà il punto attuale (senza montare nulla).
+        // Risoluzione in un'attività a priorità bassa: chiamata dal flusso dell'interfaccia (priorità massima) aspettava un
+        // servizio di sistema a priorità normale (Hang Risk di Xcode: inversione di priorità).
+        let bookmarkData = cfg.bookmark
+        let current = await Task.detached(priority: .utility) {
+            bookmarkData.flatMap { FileBookmark.resolve($0, mounting: false)?.url.path }
+        }.value
+        let fileOK = current.map { FileManager.default.fileExists(atPath: $0) } ?? false
+            || FileManager.default.fileExists(atPath: cfg.path)
         let fileText = "file: " + (fileOK ? "presente" : "assente")
         // Volume locale (nessun indirizzo di rete): basta che il file ci sia.
         guard let address = cfg.networkAddress, let schemeRange = address.range(of: "://") else {

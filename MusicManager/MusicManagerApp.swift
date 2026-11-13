@@ -213,7 +213,7 @@ struct AboutView: View {
         alert.informativeText = t("about_legal_text")
         alert.alertStyle = .informational
         alert.addButton(withTitle: t("button_close"))
-        alert.runModal()
+        StallWatchdog.modal({ alert.runModal() })
     }
 }
 
@@ -301,6 +301,13 @@ enum AppLog {
     static func debug(_ message: @autoclosure () -> String) {
         guard detailed else { return }
         write("[debug] " + message())
+    }
+
+    /// Evento con categoria, scritto anche a registro normale (per fatti rari che servono a capire cosa è successo: cambi di utente,
+    /// ecc.). La categoria compare tra parentesi quadre come primo elemento («[utenti]»), così si cerca e si filtra con facilità.
+    /// Non contiene nomi: gli utenti si indicano con il numero d'ordine, perché il registro si può inviare come diagnostica.
+    static func event(_ category: String, _ message: @autoclosure () -> String) {
+        write("[\(category)] " + message())
     }
 
     static var fileURL: URL {
@@ -500,6 +507,17 @@ enum StallWatchdog {
     /// Build 38: app in secondo piano o Mac in sospensione (i «blocchi» di centinaia di secondi del registro erano pause, non blocchi).
     private static var inactiveSince: Date?
     private static var lastResume = Date.distantPast
+    /// Fine dell'ultima finestra modale (conferme, avvisi, selettori di file): durante un `runModal` il timer del controllo non gira,
+    /// quindi il tempo passato davanti alla finestra sembrava un blocco dell'interfaccia (fino a 18 s nel registro del 4/11/2026).
+    private static var lastModalEnd = Date.distantPast
+
+    /// Esegue una finestra modale e ricorda quando è finita, così il ritardo del timer non si conta come «interfaccia ferma».
+    @discardableResult
+    static func modal<T>(_ body: () -> T) -> T {
+        let result = body()
+        lastModalEnd = Date()
+        return result
+    }
 
     static func start() {
         guard !started else { return }
@@ -539,6 +557,11 @@ enum StallWatchdog {
         lastTick = now
         lastUptime = uptime
         guard stall > 0.35, AppLog.detailed else { return }
+        // Il ritardo coincide con una finestra modale appena chiusa: non è un blocco, è il tempo in cui la finestra era aperta.
+        if now.timeIntervalSince(lastModalEnd) < stall + 0.5 {
+            AppLog.debug("[prestazioni] finestra modale aperta per \(String(format: "%.1f", stall)) s (non è un blocco)")
+            return
+        }
         if asleep {
             AppLog.debug("[prestazioni] pausa di \(String(format: "%.1f", stall)) s: il Mac era in sospensione (non è un blocco)")
             return

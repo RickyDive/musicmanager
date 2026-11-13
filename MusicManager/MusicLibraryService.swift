@@ -462,6 +462,8 @@ struct ExternalParsed: Sendable, Codable {
                 dir.appendingPathComponent("Media.localized"),
                 dir.appendingPathComponent("iTunes Media"),
                 dir.deletingLastPathComponent().appendingPathComponent("Media"),
+                dir.deletingLastPathComponent().appendingPathComponent("Media.localized"),
+                dir.deletingLastPathComponent().appendingPathComponent("iTunes Media"),
                 dir]
     }
 
@@ -510,17 +512,54 @@ struct ExternalParsed: Sendable, Codable {
         let parsed: ExternalParsed
     }
 
-    nonisolated private static func cacheURL(for xml: URL) -> URL? {
+    /// Copia compatta secondo il vecchio schema (fino alla 2.3): nome ricavato dal percorso del file. Il percorso di un volume di rete
+    /// non è stabile (due Mac con la stessa condivisione «MacSSD» si montano come `/Volumes/MacSSD` o `/Volumes/MacSSD-1` a seconda
+    /// dell'ordine), quindi la copia risultava «non valida» e il file si ricopiava per intero a ogni apertura.
+    nonisolated private static func legacyCacheURL(for xml: URL) -> URL {
         // Hash stabile del percorso (hashValue cambia a ogni avvio).
         var h: UInt64 = 5381
         for b in xml.path.utf8 { h = (h &* 33) &+ UInt64(b) }
         return AppFolders.externalLibrary.appendingPathComponent("external-library-v5-\(String(h, radix: 16)).json")
     }
 
+    /// Copia compatta di una libreria: con `key` (l'identificativo della libreria, 2.4) il nome non dipende dal percorso del volume.
+    nonisolated private static func cacheURL(for xml: URL, key: String? = nil) -> URL? {
+        guard let key, !key.isEmpty else { return legacyCacheURL(for: xml) }
+        return AppFolders.externalLibrary.appendingPathComponent("external-library-v5-\(key).json")
+    }
+
+    /// Legge la copia compatta: prima quella per identificativo, poi (una volta sola) quella del vecchio schema, che si adotta.
+    nonisolated private static func loadCacheFile(xml: URL, key: String?) -> CacheFile? {
+        let decoder = JSONDecoder()
+        if let key, let url = cacheURL(for: xml, key: key), let data = try? Data(contentsOf: url),
+           let file = try? decoder.decode(CacheFile.self, from: data) { return file }
+        let legacy = legacyCacheURL(for: xml)
+        if let data = try? Data(contentsOf: legacy), let file = try? decoder.decode(CacheFile.self, from: data) {
+            // Adozione: la copia del vecchio schema diventa subito quella della libreria (nome per identificativo), così
+            // vale anche se il volume si monta con un altro nome.
+            if let key, let url = cacheURL(for: xml, key: key), !FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.moveItem(at: legacy, to: url)
+            }
+            return file
+        }
+        return nil
+    }
+
+    /// Salva la copia compatta (per identificativo, se c'è) ed elimina quella del vecchio schema (decine di MB).
+    nonisolated private static func saveCacheFile(_ file: CacheFile, xml: URL, key: String?) {
+        guard let cache = cacheURL(for: xml, key: key) else { return }
+        try? FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(file) {
+            try? data.write(to: cache, options: .atomic)
+            if key != nil { try? FileManager.default.removeItem(at: legacyCacheURL(for: xml)) }
+        }
+    }
+
     /// Cancella la copia compatta di una libreria esterna (quando la si toglie dalle Impostazioni).
-    nonisolated static func removeCache(forXMLPath path: String) {
-        guard !path.isEmpty, let cache = cacheURL(for: URL(fileURLWithPath: path)) else { return }
-        try? FileManager.default.removeItem(at: cache)
+    nonisolated static func removeCache(forXMLPath path: String, key: String? = nil) {
+        if let key, let cache = cacheURL(for: URL(fileURLWithPath: path), key: key) { try? FileManager.default.removeItem(at: cache) }
+        guard !path.isEmpty else { return }
+        try? FileManager.default.removeItem(at: legacyCacheURL(for: URL(fileURLWithPath: path)))
     }
 
     nonisolated private static func signature(of xml: URL) -> (size: Int, modified: Double)? {
@@ -531,13 +570,12 @@ struct ExternalParsed: Sendable, Codable {
 
     /// La copia compatta salvata in precedenza, senza controllare se l'XML è cambiato (e senza nemmeno aprirlo:
     /// l'XML può trovarsi su un volume non montato). Nil se non esiste ancora.
-    nonisolated static func readCachedOnly(xml: URL) -> ExternalParsed? { readCachedOnlyWithSignature(xml: xml)?.parsed }
+    nonisolated static func readCachedOnly(xml: URL, key: String? = nil) -> ExternalParsed? { readCachedOnlyWithSignature(xml: xml, key: key)?.parsed }
 
     /// Come `readCachedOnly`, ma restituisce anche dimensione e data dell'XML al momento in cui la copia è stata salvata
     /// (per accorgersi, dopo l'apertura, che l'XML sul server è cambiato).
-    nonisolated static func readCachedOnlyWithSignature(xml: URL) -> (parsed: ExternalParsed, size: Int, modified: Double)? {
-        guard let cache = cacheURL(for: xml), let data = try? Data(contentsOf: cache),
-              let file = try? JSONDecoder().decode(CacheFile.self, from: data) else { return nil }
+    nonisolated static func readCachedOnlyWithSignature(xml: URL, key: String? = nil) -> (parsed: ExternalParsed, size: Int, modified: Double)? {
+        guard let file = loadCacheFile(xml: xml, key: key) else { return nil }
         return (file.parsed, file.size, file.modified)
     }
 
@@ -545,9 +583,8 @@ struct ExternalParsed: Sendable, Codable {
     nonisolated static func currentSignature(of xml: URL) -> (size: Int, modified: Double)? { signature(of: xml) }
 
     /// La copia compatta, solo se è ancora valida per l'XML attuale (stessa dimensione e data). Nil altrimenti.
-    nonisolated static func readValidCache(xml: URL) -> ExternalParsed? {
-        guard let sig = signature(of: xml), let cache = cacheURL(for: xml), let data = try? Data(contentsOf: cache),
-              let file = try? JSONDecoder().decode(CacheFile.self, from: data),
+    nonisolated static func readValidCache(xml: URL, key: String? = nil) -> ExternalParsed? {
+        guard let sig = signature(of: xml), let file = loadCacheFile(xml: xml, key: key),
               file.size == sig.size, file.modified == sig.modified else { return nil }
         return file.parsed
     }
@@ -556,15 +593,10 @@ struct ExternalParsed: Sendable, Codable {
     nonisolated static func fileSize(of xml: URL) -> Int64 { Int64(signature(of: xml)?.size ?? 0) }
 
     /// Legge da una copia locale dell'XML e salva la copia compatta con la firma (dimensione e data) dell'XML ORIGINALE.
-    nonisolated static func read(localCopy: URL, original xml: URL) throws -> ExternalParsed {
+    nonisolated static func read(localCopy: URL, original xml: URL, key: String? = nil) throws -> ExternalParsed {
         let sig = signature(of: xml)
         let parsed = try read(xml: localCopy)
-        if let sig, let cache = cacheURL(for: xml) {
-            try? FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if let data = try? JSONEncoder().encode(CacheFile(size: sig.size, modified: sig.modified, parsed: parsed)) {
-                try? data.write(to: cache, options: .atomic)
-            }
-        }
+        if let sig { saveCacheFile(CacheFile(size: sig.size, modified: sig.modified, parsed: parsed), xml: xml, key: key) }
         return parsed
     }
 
@@ -587,16 +619,125 @@ struct ExternalParsed: Sendable, Codable {
         return (parsed, false)
     }
 
+    // MARK: JSON del server (musicmanager-server, formato 1)
+
+    /// Versione più alta del formato JSON del server che questa versione sa leggere.
+    nonisolated static let serverSchemaKnown = 1
+
+    /// Il JSON del server comincia con «{» (dopo spazi o BOM); l'XML di Musica con «<».
+    nonisolated static func looksLikeJSON(_ data: Data) -> Bool {
+        for b in data.prefix(64) {
+            if b == 0x20 || b == 0x0A || b == 0x0D || b == 0x09 || b == 0xEF || b == 0xBB || b == 0xBF { continue }
+            return b == 0x7B
+        }
+        return false
+    }
+
+    /// Forma del file scritto da musicmanager-server (SPEC.md). Chiavi sconosciute ignorate; quasi tutto opzionale.
+    private struct ServerFile: Decodable, Sendable {
+        struct Track: Decodable, Sendable {
+            let id: String
+            let title: String?
+            let artist: String?
+            let album: String?
+            let fileSize: Int?
+            let isDRMProtected: Bool?
+            let isCloud: Bool?
+            let isPurchasedStored: Bool?
+            let isLosslessStored: Bool?
+            let duration: Double?
+            let trackNumber: Int?
+            let albumArtist: String?
+            let isCompilation: Bool?
+            let discNumber: Int?
+            let discCount: Int?
+            let genreStored: String?
+            let yearStored: Int?
+            let bpmStored: Int?
+            let playCountStored: Int?
+            let dateAddedStored: Double?
+        }
+        struct Entry: Decodable, Sendable {
+            let track: Track
+            let path: String?
+        }
+        struct Playlist: Decodable, Sendable {
+            let id: String
+            let name: String
+            let trackIDs: [String]
+            let kind: String?
+        }
+        let schema: Int?
+        let sourceFolder: String?
+        let entries: [Entry]
+        let playlists: [Playlist]?
+    }
+
+    /// Legge il JSON del server negli stessi tipi dell'XML: id con prefisso (`ext:`), artista vuoto = «Artista sconosciuto»,
+    /// percorsi del file ancora quelli del server (poi riportati sulla cartella montata da `catalog(mediaFolder:)`).
+    nonisolated static func readServerJSON(_ data: Data, idPrefix: String) throws -> ExternalParsed {
+        guard let file = try? JSONDecoder().decode(ServerFile.self, from: data) else { throw LoadError.unreadable }
+        if let schema = file.schema, schema > serverSchemaKnown { throw LoadError.serverSchema(schema) }
+        var folder = file.sourceFolder ?? ""
+        if !folder.isEmpty, !folder.hasSuffix("/") { folder += "/" }
+        let unknownArtist = t("unknown_artist")
+        var entries: [Entry] = []
+        entries.reserveCapacity(file.entries.count)
+        for e in file.entries {
+            let s = e.track
+            let artist = s.artist ?? ""
+            let track = LocalTrack(
+                id: idPrefix + s.id,
+                title: s.title ?? "",
+                artist: artist.isEmpty ? unknownArtist : artist,
+                album: s.album ?? "",
+                url: nil,
+                fileSize: s.fileSize ?? 0,
+                isDRMProtected: s.isDRMProtected ?? false,
+                isCloud: s.isCloud ?? (e.path == nil),
+                duration: s.duration ?? 0,
+                trackNumber: s.trackNumber ?? 0,
+                albumArtist: s.albumArtist ?? "",
+                isCompilation: s.isCompilation ?? false,
+                discNumber: s.discNumber ?? 0,
+                discCount: s.discCount ?? 0,
+                isPurchased: s.isPurchasedStored ?? false,
+                isLossless: s.isLosslessStored ?? false,
+                genre: s.genreStored ?? "",
+                year: s.yearStored ?? 0,
+                bpm: s.bpmStored ?? 0,
+                playCount: s.playCountStored ?? -1,
+                dateAdded: s.dateAddedStored ?? 0)
+            entries.append(Entry(track: track, path: e.path))
+        }
+        var playlists: [PlaylistInfo] = []
+        for p in file.playlists ?? [] where !p.trackIDs.isEmpty {
+            let kind = p.kind.flatMap { PlaylistKind(rawValue: $0) } ?? .regular
+            playlists.append(PlaylistInfo(id: idPrefix + p.id, name: p.name,
+                                          trackIDs: p.trackIDs.map { idPrefix + $0 }, kind: kind))
+        }
+        playlists.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        return ExternalParsed(sourceFolder: folder, entries: entries, playlists: playlists)
+    }
+
     enum LoadError: LocalizedError {
         case unreadable
-        var errorDescription: String? { t("external_err_unreadable") }
+        case serverSchema(Int)
+        var errorDescription: String? {
+            switch self {
+            case .unreadable: return t("external_err_unreadable")
+            case .serverSchema(let n): return t("external_err_server_schema", n)
+            }
+        }
     }
 
     /// Legge l'XML (plist) di Musica/iTunes: brani (`Tracks`) e playlist (`Playlists`, senza Master, cartelle e
     /// playlist di sistema).
     nonisolated static func read(xml: URL, idPrefix: String = "ext:") throws -> ExternalParsed {
-        guard let data = try? Data(contentsOf: xml, options: .mappedIfSafe),
-              let root = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any],
+        guard let data = try? Data(contentsOf: xml, options: .mappedIfSafe) else { throw LoadError.unreadable }
+        // File JSON di musicmanager-server (2.4 Internal): si riconosce dal contenuto, non dal nome (la copia locale ha estensione .xml).
+        if looksLikeJSON(data) { return try readServerJSON(data, idPrefix: idPrefix) }
+        guard let root = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any],
               let tracksDict = root["Tracks"] as? [String: Any] else { throw LoadError.unreadable }
         var sourceFolder = ""
         if let s = root["Music Folder"] as? String, let u = URL(string: s) {
@@ -735,18 +876,20 @@ final class RemoteLibraryManager: ObservableObject {
 
     /// Copia l'XML in un file temporaneo locale a blocchi, mostrando l'avanzamento in MB (e la velocità), poi lo elabora.
     /// Se per `stallSeconds` non arriva alcun dato, la lettura si interrompe con un errore chiaro.
-    private func readCopyingXML(_ xml: URL) async throws -> ExternalParsed {
+    private func readCopyingXML(_ xml: URL, key: String? = nil) async throws -> ExternalParsed {
         let total = await Task.detached { ExternalParsed.fileSize(of: xml) }.value
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("mm-xml-\(UUID().uuidString).xml")
         defer { try? FileManager.default.removeItem(at: tmp) }
         let state = CopyState()
         let started = Date()
         let stallSeconds = 90
+        // Swift 6: una cattura «weak» è una variabile e non si può usare in codice concorrente; il gestore è unico (`shared`).
+        let manager = self
         progress?.bytesTotal = total
         progress?.bytesDone = 0
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            Task.detached(priority: .userInitiated) { [weak self] in
+            Task.detached(priority: .userInitiated) {
                 do {
                     guard let input = try? FileHandle(forReadingFrom: xml) else { throw ManagerError.missingFile(xml.path) }
                     FileManager.default.createFile(atPath: tmp.path, contents: nil)
@@ -754,23 +897,43 @@ final class RemoteLibraryManager: ObservableObject {
                     defer { try? input.close(); try? output.close() }
                     var done: Int64 = 0
                     var lastPublished = Date.distantPast
+                    // Diagnosi dell'avanzamento: lettura più lenta, attesa più lunga del thread principale, aggiornamenti fatti.
+                    var reads = 0, publishes = 0
+                    var slowestRead = 0.0, slowestPublish = 0.0, longestGap = 0.0
                     while !state.isCancelled {
+                        let readStart = Date()
                         let chunk = try input.read(upToCount: 512 * 1024) ?? Data()
+                        slowestRead = max(slowestRead, Date().timeIntervalSince(readStart))
+                        reads += 1
                         if chunk.isEmpty { break }
                         try output.write(contentsOf: chunk)
                         done += Int64(chunk.count)
                         state.touch()
                         if Date().timeIntervalSince(lastPublished) > 0.25 {
+                            if lastPublished != .distantPast { longestGap = max(longestGap, Date().timeIntervalSince(lastPublished)) }
                             lastPublished = Date()
                             let d = done
-                            await MainActor.run { self?.publishCopy(done: d, since: started) }
+                            let waitStart = Date()
+                            await MainActor.run { manager.publishCopy(done: d, since: started) }
+                            slowestPublish = max(slowestPublish, Date().timeIntervalSince(waitStart))
+                            publishes += 1
                         }
                     }
+                    AppLog.debug("Libreria remota: copia — \(reads) letture, la più lenta \(String(format: "%.2f", slowestRead)) s; \(publishes) aggiornamenti del contatore, intervallo massimo \(String(format: "%.2f", longestGap)) s, attesa massima del thread principale \(String(format: "%.2f", slowestPublish)) s")
                     let d = done
-                    await MainActor.run { self?.publishCopy(done: d, since: started) }
+                    await MainActor.run { manager.publishCopy(done: d, since: started) }
                     if state.claim() { cont.resume() }
                 } catch {
                     if state.claim() { cont.resume(throwing: error) }
+                }
+            }
+            // Indicatore di attesa: se per oltre 2 s non arrivano dati (VPN/rete lenta) lo dice invece di restare fermo sull'ultimo valore.
+            Task.detached {
+                while !state.isFinished {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if state.isFinished { break }
+                    let idle = state.idle()
+                    if idle > 2 { await MainActor.run { manager.publishWaiting(idle: Int(idle)) } }
                 }
             }
             Task.detached {
@@ -785,10 +948,27 @@ final class RemoteLibraryManager: ObservableObject {
             }
         }
 
+        let copySeconds = Date().timeIntervalSince(started)
+        let megabytes = Double(total) / 1_000_000   // come nella riga di stato (prima 1_048_576: 30,0 nel registro, 31,5 nella barra)
+        AppLog.debug("Libreria remota: file copiato dalla rete: \(String(format: "%.1f", megabytes)) MB in \(String(format: "%.2f", copySeconds)) s (\(String(format: "%.1f", megabytes / max(copySeconds, 0.01))) MB/s)")
+        if copySeconds > 2 {
+            // Mostra il valore finale (prima la fase successiva lo sostituiva subito, e il contatore sembrava non arrivare al totale).
+            progress?.bytesDone = total
+            progress?.phase = t("remote_phase_copy_done", Self.megabytes(total), Int(copySeconds.rounded()))
+            try? await Task.sleep(nanoseconds: 700_000_000)
+        }
         progress?.bytesTotal = 0
         progress?.phase = t("remote_phase_processing")
         await Task.yield()
-        return try await Task.detached(priority: .userInitiated) { try ExternalParsed.read(localCopy: tmp, original: xml) }.value
+        let decodeStart = Date()
+        let result = try await Task.detached(priority: .userInitiated) { try ExternalParsed.read(localCopy: tmp, original: xml, key: key) }.value
+        AppLog.debug("Libreria remota: lettura e decodifica della copia locale in \(String(format: "%.2f", Date().timeIntervalSince(decodeStart))) s")
+        return result
+    }
+
+    private func publishWaiting(idle: Int) {
+        guard let pr = progress, pr.bytesTotal > 0 else { return }
+        progress?.phase = t("remote_phase_copy_waiting", Self.megabytes(pr.bytesDone), Self.megabytes(pr.bytesTotal), idle)
     }
 
     private func publishCopy(done: Int64, since start: Date) {
@@ -812,7 +992,7 @@ final class RemoteLibraryManager: ObservableObject {
         var cached: ExternalParsed?
         var readStart: Date?
         if preferCache {
-            let found = await Task.detached(priority: .userInitiated) { ExternalParsed.readCachedOnlyWithSignature(xml: pathURL) }.value
+            let found = await Task.detached(priority: .userInitiated) { ExternalParsed.readCachedOnlyWithSignature(xml: pathURL, key: cfg.id.uuidString) }.value
             cached = found?.parsed
             if let found { cacheSignatures[cfg.id] = (found.size, found.modified) } else { cacheSignatures[cfg.id] = nil }
         }
@@ -833,6 +1013,7 @@ final class RemoteLibraryManager: ObservableObject {
         let parsed: ExternalParsed
         if let cached {
             parsed = cached
+            AppLog.debug("Libreria remota «\(cfg.nickname)»: aperta dalla copia salvata, senza toccare la rete")
         } else {
             guard FileManager.default.fileExists(atPath: xml.path) else { throw ManagerError.missingFile(cfg.path) }
             // Librerie salvate prima dei segnalibri: se ne crea uno ora.
@@ -840,10 +1021,12 @@ final class RemoteLibraryManager: ObservableObject {
                 AppSettings.shared.setXMLLocation(path: xml.path, bookmark: made, for: cfg.id)
             }
             readStart = Date()
-            if let valid = await Task.detached(priority: .userInitiated, operation: { ExternalParsed.readValidCache(xml: xml) }).value {
+            if let valid = await Task.detached(priority: .userInitiated, operation: { ExternalParsed.readValidCache(xml: xml, key: cfg.id.uuidString) }).value {
                 parsed = valid
+                AppLog.debug("Libreria remota «\(cfg.nickname)»: copia salvata valida (il file sul server ha la stessa dimensione e la stessa data): nessuna copia dalla rete, \(String(format: "%.2f", Date().timeIntervalSince(readStart ?? Date()))) s tra controllo e lettura")
             } else {
-                parsed = try await readCopyingXML(xml)
+                AppLog.debug("Libreria remota «\(cfg.nickname)»: copia salvata assente o non valida (dimensione o data del file diverse da quelle salvate): il file si ricopia per intero dalla rete")
+                parsed = try await readCopyingXML(xml, key: cfg.id.uuidString)
             }
         }
 
@@ -879,7 +1062,7 @@ final class RemoteLibraryManager: ObservableObject {
             q.message = t("external_pick_media_message")
             q.canChooseFiles = false
             q.canChooseDirectories = true
-            let ok = q.runModal() == .OK
+            let ok = StallWatchdog.modal({ q.runModal() }) == .OK
             progress = saved
             guard ok, let folder = q.url else { throw ManagerError.noMediaFolder }
             media = folder
@@ -954,6 +1137,45 @@ struct DriveDeviceChoice: Identifiable, Equatable {
     let extensions: [String]
     let connected: Bool
     var formatsText: String { extensions.map { $0.uppercased() }.joined(separator: ", ") }
+}
+
+/// Ultima posizione nota della cartella di ogni libreria «Unità esterna», per le viste e il flusso principale (2.4).
+/// Risolvere il segnalibro può toccare il sistema (anche rimontare il volume): sul thread principale causava inversione di
+/// priorità («User-interactive … waiting on a lower QoS»). Qui la risoluzione avviene in un'attività a bassa priorità e il
+/// risultato (rinnovato al massimo ogni 3 s) si legge senza attese; la vista si aggiorna quando il valore cambia.
+@MainActor
+final class DriveRootCache: ObservableObject {
+    static let shared = DriveRootCache()
+    @Published private(set) var revision = 0
+    private var entries: [UUID: (url: URL?, time: Date)] = [:]
+    private var refreshing: Set<UUID> = []
+
+    func root(_ cfg: DriveLibraryConfig) -> URL? {
+        if let entry = entries[cfg.id] {
+            if Date().timeIntervalSince(entry.time) > 3 { refresh(cfg) }
+            return entry.url
+        }
+        refresh(cfg)
+        // Primo valore provvisorio, solo dal percorso salvato (nessun segnalibro).
+        var isDir: ObjCBool = false
+        if !cfg.path.isEmpty, FileManager.default.fileExists(atPath: cfg.path, isDirectory: &isDir), isDir.boolValue {
+            return URL(fileURLWithPath: cfg.path, isDirectory: true)
+        }
+        return nil
+    }
+
+    func refresh(_ cfg: DriveLibraryConfig) {
+        guard !refreshing.contains(cfg.id) else { return }
+        refreshing.insert(cfg.id)
+        Task { [weak self] in
+            let url = await Task.detached(priority: .utility) { DriveLibraryService.rootURL(cfg) }.value
+            guard let self else { return }
+            self.refreshing.remove(cfg.id)
+            let old = self.entries[cfg.id]
+            self.entries[cfg.id] = (url, Date())
+            if old == nil || old!.url != url { self.revision += 1 }
+        }
+    }
 }
 
 enum DriveLibraryService {

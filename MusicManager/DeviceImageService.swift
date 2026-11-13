@@ -624,7 +624,9 @@ enum SoftwareUpdateStatus: Equatable {
 enum GarminUpdateService {
     private static let endpoint = URL(string: "https://omt.garmin.com/api/device-software/v1/updates")!
 
-    static func check(deviceXML: Data, installedVersion: String?) async -> SoftwareUpdateStatus? {
+    /// `onReleases`: versione e `releaseState` degli elementi di software di sistema proposti (per ricordare il canale).
+    static func check(deviceXML: Data, installedVersion: String?,
+                      onReleases: (@MainActor @Sendable ([(version: String, state: String)]) -> Void)? = nil) async -> SoftwareUpdateStatus? {
         // Prova della finestra «Aggiornamento disponibile» senza interrogare Garmin (il server decide in base all'unità, non alla
         // versione scritta nell'XML). Si accende da Terminale:  defaults write com.crdev.MusicManager debugFakeSoftwareUpdate -bool YES
         // e si spegne con:  defaults delete com.crdev.MusicManager debugFakeSoftwareUpdate
@@ -707,6 +709,13 @@ enum GarminUpdateService {
         }
         let firmware = systemSoftware.isEmpty ? allFirmware.filter { !isDataFile($0) } : systemSoftware
         func versionText(_ u: [String: Any]) -> String? { (u["displayVersion"] as? String) ?? (u["version"] as? String) }
+        if let onReleases {
+            let seen = firmware.compactMap { u -> (version: String, state: String)? in
+                guard let v = versionText(u), let st = u["releaseState"] as? String else { return nil }
+                return (v, st)
+            }
+            if !seen.isEmpty { await onReleases(seen) }
+        }
         let best = firmware.max { (versionText($0) ?? "").compare(versionText($1) ?? "", options: .numeric) == .orderedAscending }
         guard let best, let version = versionText(best) else {
             AppLog.debug("Controllo aggiornamento software: ESITO aggiornato (nessun elemento di software di sistema fra quelli proposti; i file di dati come mappe e fusi orari sono ignorati)")
@@ -720,7 +729,13 @@ enum GarminUpdateService {
         AppLog.debug("Controllo aggiornamento software: ESITO aggiornamento disponibile \(version) (installata \(installedVersion ?? "?"))")
         let notes = (best["releaseNotes"] as? [[String: Any]])?
             .compactMap { $0["changeLog"] as? [String] }.flatMap { $0 }.joined(separator: "\n")
-        return .available(version: version, notes: (notes?.isEmpty ?? true) ? nil : notes)
+        // 2.4 Internal: dispositivo iscritto al programma Garmin Beta. Il server segnala l'elemento con `releaseState = public_beta`
+        // (le versioni normali hanno `live`): la versione mostrata porta il suffisso «Beta» (capsula, tabella, avvisi). L'aggiornamento
+        // ignorato è ricordato con lo stesso testo, quindi una beta ignorata non nasconde la stessa versione quando diventa pubblica.
+        let state = ((best["releaseState"] as? String) ?? "").lowercased()
+        let shownVersion = state.contains("beta") ? "\(version) Beta" : version
+        AppLog.debug("Controllo aggiornamento software: stato di rilascio «\(state.isEmpty ? "?" : state)» → mostrata \(shownVersion)")
+        return .available(version: shownVersion, notes: (notes?.isEmpty ?? true) ? nil : notes)
     }
 }
 
@@ -778,6 +793,88 @@ enum DeviceXMLStore {
         guard let data = try? encoder.encode(StoredMaps(checkedAt: checkedAt, installed: catalog.installed, available: catalog.available)) else { return }
         try? FileManager.default.createDirectory(at: deviceFolder(id), withIntermediateDirectories: true)
         try? data.write(to: mapsFile(id), options: .atomic)
+    }
+
+    // MARK: Novità delle versioni (UpdateNotes.json, accanto a GarminDevice.xml)
+
+    /// Novità (changelog) date da Garmin per una versione del software, ricordate perché si possano rivedere anche dopo
+    /// l'aggiornamento e a dispositivo scollegato. Il testo è quello ricevuto, senza modifiche.
+    struct StoredUpdateNote: Codable, Equatable {
+        var version: String
+        var notes: String
+        var savedAt: Date
+        /// «beta» o «stable» (nil = non noto, per i file scritti dalla prima versione).
+        var channel: String?
+        /// Data di uscita («aaaa-mm-gg»), se nota.
+        var released: String?
+
+        /// Data di uscita come data (mezzanotte UTC; per mostrarla si usa il fuso UTC, così non cambia giorno).
+        var releasedDate: Date? {
+            guard let released else { return nil }
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withFullDate]
+            return f.date(from: released)
+        }
+    }
+
+    private static func notesFile(_ id: String) -> URL { deviceFolder(id).appendingPathComponent("UpdateNotes.json") }
+
+    /// «7.15 Beta» e «7.15» sono la stessa chiave: quando la beta diventa pubblica (o viene installata) si ritrovano le stesse novità.
+    private static func updateNotesKey(_ version: String) -> String {
+        var v = version.trimmingCharacters(in: .whitespaces)
+        if v.lowercased().hasSuffix(" beta") { v = String(v.dropLast(5)).trimmingCharacters(in: .whitespaces) }
+        return v
+    }
+
+    private static func loadUpdateNotes(forDevice id: String) -> [StoredUpdateNote] {
+        guard let data = try? Data(contentsOf: notesFile(id)) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode([StoredUpdateNote].self, from: data)) ?? []
+    }
+
+    /// Salva le novità di una versione. `channel`: «beta» o «stable» (nil = non noto). Si riscrive solo se qualcosa è cambiato;
+    /// si tengono le 15 versioni con il numero più alto. L'uscita ufficiale sostituisce la beta con lo stesso numero.
+    static func saveUpdateNotes(_ notes: String, version: String, channel: String? = nil, released: String? = nil, forDevice id: String) {
+        let key = updateNotesKey(version)
+        guard !key.isEmpty, !notes.isEmpty else { return }
+        var all = loadUpdateNotes(forDevice: id)
+        if let i = all.firstIndex(where: { $0.version == key }) {
+            var e = all[i]
+            if e.notes != notes { e.notes = notes; e.savedAt = Date() }
+            if let channel, e.channel != channel { e.channel = channel }
+            if let released, e.released != released { e.released = released }
+            guard e != all[i] else { return }
+            all[i] = e
+        } else {
+            all.append(StoredUpdateNote(version: key, notes: notes, savedAt: Date(), channel: channel, released: released))
+        }
+        all = Array(all.sorted { $0.version.compare($1.version, options: .numeric) == .orderedDescending }.prefix(15))
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(all) else { return }
+        try? FileManager.default.createDirectory(at: deviceFolder(id), withIntermediateDirectories: true)
+        try? data.write(to: notesFile(id), options: .atomic)
+    }
+
+    /// Novità ricordate per una versione (nil se non ce ne sono).
+    static func updateNotes(version: String, forDevice id: String) -> String? {
+        let key = updateNotesKey(version)
+        return loadUpdateNotes(forDevice: id).first { $0.version == key }?.notes
+    }
+
+    /// Storico delle novità per «Altre versioni…»: dal più recente (per data di uscita, poi per numero), senza la versione già
+    /// mostrata. Con `includeBeta` false restano solo le ufficiali («stable»): una voce di canale non noto non si mostra, perché
+    /// potrebbe essere una beta.
+    static func updateNotesHistory(forDevice id: String, excludingVersion: String?, includeBeta: Bool) -> [StoredUpdateNote] {
+        let skip = excludingVersion.map(updateNotesKey)
+        return loadUpdateNotes(forDevice: id)
+            .filter { $0.version != skip && (includeBeta || $0.channel == "stable") }
+            .sorted {
+                let a = $0.released ?? "", b = $1.released ?? ""
+                return a != b ? a > b : $0.version.compare($1.version, options: .numeric) == .orderedDescending
+            }
     }
 
     /// Perché Maps.json non si legge (nil se non c'è il file o se è tutto a posto): per la diagnostica in Settings.
@@ -900,7 +997,7 @@ enum AppFolders {
 
 /// Dati dell'unità restituiti dal servizio Garmin `unit-info`: numero di serie di produzione (quello stampato
 /// sull'orologio) e immagine ufficiale del prodotto.
-struct GarminUnitInfo {
+struct GarminUnitInfo: Codable {
     var serialNumber: String?
     var graphicURL: URL?
     var deviceModel: String?
@@ -919,7 +1016,20 @@ enum GarminUnitInfoService {
         LocalizationStore.language == .it ? "it-IT,it;q=0.9" : "en-US,en;q=0.9"
     }
 
-    static func fetch(unitID: String) async -> GarminUnitInfo? {
+    /// 2.4 Internal: la risposta si ricorda per ogni unità (ID + modello, valida 30 giorni), così non si richiama Garmin a ogni
+    /// cambio utente o a ogni ricollegamento. `force` salta la memoria (e la rinnova).
+    static func fetch(unitID: String, model: String? = nil, force: Bool = false) async -> GarminUnitInfo? {
+        if !force, let cached = UnitInfoCache.entry(unitID: unitID, model: model) {
+            AppLog.debug("unit-info: dispositivo …\(unitID.suffix(4)) dalla memoria locale (nessuna chiamata a Garmin)")
+            return cached
+        }
+        guard let result = await fetchFromServer(unitID: unitID) else { return nil }
+        // Si ricorda solo una risposta completa (numero di serie presente e verifica della variante conclusiva).
+        if result.conclusive, result.info.serialNumber != nil { UnitInfoCache.store(result.info, unitID: unitID, model: model) }
+        return result.info
+    }
+
+    private static func fetchFromServer(unitID: String) async -> (info: GarminUnitInfo, conclusive: Bool)? {
         // L'ID dell'unità è numerico (per la fēnix 9 Pro coincide col «Global ID» dell'XML, da confermare).
         guard !unitID.isEmpty, unitID.allSatisfy(\.isNumber),
               let url = URL(string: "https://omt.garmin.com/api/unit-info/manufacturers/\(manufacturer)/unitids/\(unitID)")
@@ -945,12 +1055,62 @@ enum GarminUnitInfoService {
             let v = (json[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             return (v?.isEmpty ?? true) ? nil : v
         }
-        return GarminUnitInfo(serialNumber: text("serialNumber"),
-                              graphicURL: text("graphicUrl").flatMap { URL(string: $0) },
-                              deviceModel: text("deviceModel"), unitPartNumber: text("unitPartNumber"))
+        var graphic = text("graphicUrl").flatMap { URL(string: $0) }
+        var conclusive = true   // falso se la verifica della variante è fallita per un problema di rete (da non ricordare)
+        let unitPart = text("unitPartNumber")
+        // 2.4 Internal: `graphicUrl` è l'immagine generica del modello («010-04337-00»); `unitPartNumber` è il codice commerciale della
+        // variante di QUESTA unità («010-04337-01» = cinturino arancione, «-21» = grafite…). Se la foto della variante esiste sullo
+        // stesso sito (res.garmin.com), si usa quella; altrimenti resta l'immagine generica. Non esce nessun dato in più.
+        if let unitPart, unitPart.range(of: #"^\d{3}-\d{5}-\d{2}$"#, options: .regularExpression) != nil,
+           let generic = graphic, generic.host == "res.garmin.com",
+           let variant = URL(string: "https://res.garmin.com/en/products/\(unitPart)/v/c1_01_md.png") {
+            var req = URLRequest(url: variant, timeoutInterval: 10)
+            req.setValue("MusicManager", forHTTPHeaderField: "User-Agent")
+            let got = try? await URLSession.shared.data(for: req)
+            if let (img, resp) = got,
+               (resp as? HTTPURLResponse)?.statusCode == 200, img.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
+                AppLog.debug("immagine: variante \(unitPart) trovata → \(variant.lastPathComponent)")
+                graphic = variant
+            } else {
+                if got == nil { conclusive = false }
+                AppLog.debug("immagine: variante \(unitPart) non disponibile su res.garmin.com → immagine generica")
+            }
+        }
+        return (GarminUnitInfo(serialNumber: text("serialNumber"), graphicURL: graphic,
+                               deviceModel: text("deviceModel"), unitPartNumber: unitPart), conclusive)
     }
 }
 
+
+/// Memoria locale delle risposte `unit-info` (file `unit-info-cache.json` accanto alle immagini dei dispositivi): per ogni
+/// unità, ID + modello → risposta di Garmin, valida 30 giorni. Globale (non per utente): serve a non richiamare Garmin a ogni
+/// cambio utente. Contiene numero di serie e indirizzo dell'immagine, nulla di più.
+enum UnitInfoCache {
+    private struct Entry: Codable { var info: GarminUnitInfo; var model: String; var date: Date }
+    private static let lock = NSLock()
+    private static let maxAge: TimeInterval = 30 * 24 * 3600
+    private static var file: URL { AppFolders.devicesImages.appendingPathComponent("unit-info-cache.json") }
+
+    private static func load() -> [String: Entry] {
+        guard let data = try? Data(contentsOf: file) else { return [:] }
+        return (try? JSONDecoder().decode([String: Entry].self, from: data)) ?? [:]
+    }
+
+    static func entry(unitID: String, model: String?) -> GarminUnitInfo? {
+        lock.lock(); defer { lock.unlock() }
+        guard let e = load()[unitID], Date().timeIntervalSince(e.date) < maxAge else { return nil }
+        if let model, !model.isEmpty, !e.model.isEmpty, model != e.model { return nil }   // modello cambiato: si richiede
+        return e.info
+    }
+
+    static func store(_ info: GarminUnitInfo, unitID: String, model: String?) {
+        lock.lock(); defer { lock.unlock() }
+        var all = load()
+        all[unitID] = Entry(info: info, model: model ?? "", date: Date())
+        try? FileManager.default.createDirectory(at: AppFolders.devicesImages, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(all) { try? data.write(to: file, options: .atomic) }
+    }
+}
 
 // MARK: - Mappe del dispositivo (server Garmin)
 
@@ -980,6 +1140,18 @@ struct GarminMapEntry: Identifiable, Codable, Equatable {
 }
 
 extension GarminMapEntry {
+    /// Versione installata nello stesso formato di quella offerta da Garmin (come in Garmin Express): CourseView «26.20», Base maps
+    /// «9.0», ma Ski Map e TopoActive «2026.10» / «2026.11». Nel `GarminDevice.xml` l'anno è sempre a due cifre («26.10»): si porta a
+    /// quattro cifre solo se la versione offerta lo è. Solo per la visualizzazione: Maps.json e confronti restano nel formato dell'XML.
+    var installedVersionDisplay: String? {
+        guard let v = installedVersion else { return nil }
+        let offered = version.split(separator: ".", maxSplits: 1).map(String.init)
+        let parts = v.split(separator: ".", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let year = Int(parts[0]), year < 100,
+              let offeredMajor = offered.first.flatMap({ Int($0) }), offeredMajor >= 1000 else { return v }
+        return "\(2000 + year).\(parts[1])"
+    }
+
     /// Lettura esplicita (invece di quella generata): i campi facoltativi, compreso `files` assente nei Maps.json
     /// scritti dalle versioni precedenti, si leggono con `decodeIfPresent`.
     nonisolated init(from decoder: Decoder) throws {
@@ -1056,6 +1228,19 @@ enum GarminMapsService {
         }
     }
 
+    /// Versione installata per ogni file delle mappe: nome del file (senza estensione, maiuscolo) → versione, dall'XML.
+    /// Serve quando il PartNumber indicato da Garmin per la release nuova non coincide con quello installato (cambia il suffisso
+    /// a ogni release): si ricava allora la versione dai file della mappa installata (`filesToRemove`).
+    static func fileVersions(fromXML data: Data) -> [String: (major: Int, minor: Int)] {
+        let parser = XMLParser(data: data)
+        let delegate = UpdateFileParser()
+        parser.delegate = delegate
+        parser.parse()
+        var out: [String: (major: Int, minor: Int)] = [:]
+        for (stem, part) in delegate.fileParts { if let v = delegate.versions[part] { out[stem] = v } }
+        return out
+    }
+
     /// File delle mappe sul dispositivo: nome del file (senza estensione, maiuscolo) → PartNumber della mappa, dall'XML.
     /// Serve al navigatore dei file per marcare i file delle mappe («Maps - Europe»).
     static func mapFileParts(fromXML data: Data) -> [String: String] {
@@ -1078,20 +1263,35 @@ enum GarminMapsService {
     /// memorizzate in Maps.json: mappa aggiunta (una delle «offerte» ora è presente), rimossa o con versione diversa.
     /// Confronto solo locale, senza interrogare Garmin.
     static func mapsChanged(since stored: DeviceXMLStore.StoredMaps, xml: Data) -> Bool {
+        !mapsChangeReasons(since: stored, xml: xml).isEmpty
+    }
+
+    /// Come `mapsChanged`, ma elenca i motivi («Garmin Ski Map: rimossa», «…: versione 26.10 → 26.20», «…: aggiunta») per il registro.
+    static func mapsChangeReasons(since stored: DeviceXMLStore.StoredMaps, xml: Data) -> [String] {
+        var reasons: [String] = []
         let files = installedVersions(fromXML: xml)
         func partNumber(_ entry: GarminMapEntry) -> String? {
             guard let p = entry.id.split(separator: "|", omittingEmptySubsequences: false).last, !p.isEmpty else { return nil }
             return String(p)
         }
+        let byStem = fileVersions(fromXML: xml)
         for entry in stored.installed {
             guard let part = partNumber(entry), let before = entry.installedVersion else { continue }
-            guard let now = files[part] else { return true }                 // rimossa
-            if "\(now.major).\(now.minor)" != before { return true }       // versione cambiata
+            // 2.4 Internal: il PartNumber salvato è quello della release PROPOSTA da Garmin; con la mappa ancora alla release
+            // precedente (es. Ski Map 26.10 con la 2026.20 disponibile) nell'XML c'è un altro PartNumber, e la mappa veniva
+            // scambiata per «rimossa» a ogni collegamento. Si ripiega sui file della mappa (come in `fetch`); la più bassa se più file.
+            var current = files[part]
+            if current == nil, let names = entry.files, !names.isEmpty {
+                let stems = names.map { (($0 as NSString).deletingPathExtension).uppercased() }
+                current = stems.compactMap { byStem[$0] }.min { ($0.major, $0.minor) < ($1.major, $1.minor) }
+            }
+            guard let now = current else { reasons.append("«\(entry.name)»: rimossa"); continue }
+            if "\(now.major).\(now.minor)" != before { reasons.append("«\(entry.name)»: versione \(before) → \(now.major).\(now.minor)") }
         }
         for entry in stored.available ?? [] {
-            if let part = partNumber(entry), files[part] != nil { return true }  // aggiunta
+            if let part = partNumber(entry), files[part] != nil { reasons.append("«\(entry.name)»: aggiunta") }
         }
-        return false
+        return reasons
     }
 
     /// Nome dell'area di livello più alto per ogni codice di sotto-regione (es. «TopoActive-EU-West» → «Europa»).
@@ -1161,6 +1361,7 @@ enum GarminMapsService {
         else { return (nil, "Risposta senza elenco mappe (\(data.count) byte)") }
 
         let installedFiles = installedVersions(fromXML: deviceXML)
+        let stemVersions = fileVersions(fromXML: deviceXML)
         var regions: [String: String] = [:]
         regionTitles(json["subregions"] as? [[String: Any]] ?? [], into: &regions)
 
@@ -1176,7 +1377,15 @@ enum GarminMapsService {
             // Versione disponibile «2026.11» ↔ file installato «26.11»: si confronta con le ultime due cifre dell'anno.
             let shownMajor = major
             if major >= 100 { major %= 100 }
-            let installedVersion = imagePart.flatMap { installedFiles[$0] }
+            var installedVersion = imagePart.flatMap { installedFiles[$0] }
+            if installedVersion == nil, isInstalled {
+                // Fallback (2.4 Internal): il PartNumber della release proposta non è nell'XML (es. «Garmin Ski Map» 2026.20 con il
+                // dispositivo ancora alla 26.10): si usa la versione dei file della mappa installata. Con più file, la più bassa.
+                let stems = (Self.fileNames(in: m["filesToRemove"]) ?? []).map { (($0 as NSString).deletingPathExtension).uppercased() }
+                let found = stems.compactMap { stemVersions[$0] }
+                installedVersion = found.min { ($0.major, $0.minor) < ($1.major, $1.minor) }
+                AppLog.debug("mappe: «\(name)» senza PartNumber \(imagePart ?? "—") nell'XML; file \(stems.joined(separator: ", ")) → versione \(installedVersion.map { "\($0.major).\($0.minor)" } ?? "non trovata")")
+            }
             let update: Bool? = installedVersion.map { ($0.major, $0.minor) < (major, minor) }
             let size: UInt64
             if isInstalled {

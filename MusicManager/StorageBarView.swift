@@ -23,8 +23,9 @@ import AppKit
 /// - grigio molto scuro («System», 2.1 Beta 3): sistema e firmware del dispositivo, stimato come lo spazio occupato
 ///   non classificabile (capacità − libero − tutte le altre categorie);
 /// - grigio («Data»): cartella "Garmin", mappe escluse;
-/// - viola («Maps»): mappe (file .gma/.img) dentro la cartella Garmin;
+/// - giallo scuro («Maps»): mappe (file .gma/.img) dentro la cartella Garmin;
 /// - blu («Services»): brani dei servizi di streaming, somma di MediaCacheSize di GarminDevice.xml;
+/// - viola («Podcasts», 2.4 Internal): cartella "Podcasts", prima di Music;
 /// - verde («Music»): cartella "Music";
 /// - righe diagonali (verdi, rosse se non c'è spazio): brani selezionati da inviare.
 struct StorageBarView: View {
@@ -34,6 +35,8 @@ struct StorageBarView: View {
     /// Servizi di streaming (somma, senza distinguerli): 0 = nessuno, il segmento non compare.
     var services: UInt64 = 0
     let music: UInt64
+    /// Cartella «Podcasts» (2.4 Internal): 0 = nessun podcast, il segmento non compare.
+    var podcasts: UInt64 = 0
     let free: UInt64
     /// Spazio dei brani selezionati da inviare (0 = nessuno): segmento a strisce dopo il verde di Music.
     var pending: UInt64 = 0
@@ -47,11 +50,11 @@ struct StorageBarView: View {
     /// (senza un vuoto che sembrerebbe libero).
     private var systemBytes: UInt64 {
         guard !isLoading, !unsupported, total > 0 else { return 0 }
-        let known = garmin + maps + services + music
+        let known = garmin + maps + services + music + podcasts
         return usedBytes > known ? usedBytes - known : 0
     }
     /// Tutto lo spazio occupato rappresentato nella barra, esclusi i brani da inviare.
-    private var usedAll: UInt64 { systemBytes + garmin + maps + services + music }
+    private var usedAll: UInt64 { systemBytes + garmin + maps + services + music + podcasts }
 
     private let barHeight: CGFloat = 16
     @State private var barWidth: CGFloat = 0
@@ -74,9 +77,11 @@ struct StorageBarView: View {
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(white: 0.22, alpha: 1) : NSColor(white: 0.33, alpha: 1)
     })
     static let servicesColor = Color(red: 0.33, green: 0.52, blue: 0.90)
-    /// Viola (2.1 Beta 3): l'arancione è riservato all'avviso «spazio quasi finito» dei brani da inviare.
-    static let mapsColor = Color(red: 0.66, green: 0.42, blue: 0.86)
+    /// Giallo scuro (2.4 Internal; prima viola, ora lasciato ai Podcast): l'arancione è riservato all'avviso «spazio quasi finito» dei brani da inviare.
+    static let mapsColor = Color(red: 0.78, green: 0.60, blue: 0.08)
     static let musicColor = Color(red: 0.42, green: 0.75, blue: 0.35)
+    /// Viola «Apple» (2.4 Internal): il colore dell'icona di Apple Podcasts.
+    static let podcastsColor = Color(red: 0.66, green: 0.36, blue: 0.86)
     /// Colore dei testi grigi del pannello Device (legenda, conteggi, etichette): in tema scuro più chiaro del grigio
     /// secondario di sistema, che sullo sfondo scuro risultava poco leggibile; in tema chiaro resta quello di sistema.
     static let textColor = Color(nsColor: NSColor(name: nil) { appearance in
@@ -137,7 +142,9 @@ struct StorageBarView: View {
                                     tip: t("storage_tip", t("storage_legend_maps"), formatted(maps)))
                             segment(color: Self.servicesColor, value: services, totalWidth: geo.size.width, separated: systemBytes + garmin + maps > 0,
                                     tip: t("storage_tip", t("storage_legend_services"), formatted(services)))
-                            segment(color: Self.musicColor, value: music, totalWidth: geo.size.width, separated: systemBytes + garmin + maps + services > 0,
+                            segment(color: Self.podcastsColor, value: podcasts, totalWidth: geo.size.width, separated: systemBytes + garmin + maps + services > 0,
+                                    tip: t("storage_tip", t("storage_legend_podcasts"), formatted(podcasts)))
+                            segment(color: Self.musicColor, value: music, totalWidth: geo.size.width, separated: systemBytes + garmin + maps + services + podcasts > 0,
                                     tip: t("storage_tip", t("storage_legend_music"), formatted(music)))
                         }
                         if pending > 0 && !unsupported {
@@ -197,7 +204,8 @@ struct StorageBarView: View {
             parts.append((t("storage_legend_used"), usedBytes))
         } else {
             parts = [(t("storage_legend_system"), systemBytes), (t("storage_legend_data"), garmin), (t("storage_legend_maps"), maps),
-                     (t("storage_legend_services"), services), (t("storage_legend_music"), music)]
+                     (t("storage_legend_services"), services), (t("storage_legend_podcasts"), podcasts),
+                     (t("storage_legend_music"), music)]
         }
         var start: CGFloat = 0
         for part in parts where part.bytes > 0 {
@@ -300,6 +308,7 @@ struct StorageBarView: View {
                 if isPresent(garmin) { legendItem(color: Self.garminColor, label: t("storage_legend_data"), help: t("storage_data_help")) }
                 if isPresent(maps) { legendItem(color: Self.mapsColor, label: t("storage_legend_maps")) }
                 if isPresent(services) { legendItem(color: Self.servicesColor, label: t("storage_legend_services"), help: t("storage_services_help")) }
+                if isPresent(podcasts) { legendItem(color: Self.podcastsColor, label: t("storage_legend_podcasts")) }
                 if isPresent(music) { legendItem(color: Self.musicColor, label: t("storage_legend_music")) }
             }
             // Ultima voce: lo spazio libero, il cui valore sta scritto al centro della zona libera della barra.

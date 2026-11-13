@@ -14,8 +14,27 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import Combine
 import SwiftUI
 import AppKit
+
+/// Dettagli della riga del brano in riproduzione nella Custom Playlist (numero, tempo progressivo, km PacePro, brano a metà), mostrati dal
+/// mini player al posto dell'icona «in playlist» in base alle opzioni attive.
+struct CustomPlayInfo: Equatable {
+    var trackID: String
+    var number: Int
+    var rolling: String?
+    var kmStart: String?
+    var crossings: [Int]
+    var finish: Bool
+    var isMid: Bool
+    var help: String
+}
+
+@MainActor final class CustomPlayInfoStore: ObservableObject {
+    static let shared = CustomPlayInfoStore()
+    @Published var info: CustomPlayInfo?
+}
 
 /// Vista riutilizzabile: Brani / Album / Artisti / Playlist (+ Custom Playlist lato Apple Music)
 /// con ricerca e selezione multipla.
@@ -44,6 +63,13 @@ final class CatalogDerivedCache<Track: CatalogTrack> {
     var statsCount = -1
     var statsFirstID: Track.ID?
     var statsLastID: Track.ID?
+    /// «Già sul dispositivo» per gruppo (2.4): scorrere i brani di ogni gruppo a ogni ridisegno, con il dispositivo collegato, costava
+    /// 1–1,7 s su 55.000 brani. Vale finché non cambiano l'indice dei file del dispositivo (`revision`) e la libreria (numero, primo, ultimo).
+    var onDevice: [String: (count: Int, value: Bool)] = [:]
+    var onDeviceRevision = -1
+    var onDeviceCount = -1
+    var onDeviceFirstID: Track.ID?
+    var onDeviceLastID: Track.ID?
 }
 
 struct CatalogBrowser<Track: CatalogTrack>: View {
@@ -111,6 +137,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// Se presente, a destra di ogni brano compare l'icona dell'origine della copertina (al posto
     /// della dimensione del file).
     var artworkOriginProvider: ((Track) async -> ArtworkOrigin)? = nil
+    /// Controllo completo (file, libreria di Musica, altri brani dell'album, Musica via AppleScript), più lento: serve solo a confermare
+    /// i brani che il controllo veloce dà «senza copertina» (filtro «solo senza copertina» in Brani).
+    var artworkOriginConfirmProvider: ((Track) async -> ArtworkOrigin)? = nil
     /// Chiamata quando compaiono brani che potrebbero non avere ancora la copertina: si espande un
     /// gruppo (playlist, artista, album) o si selezionano dei brani. Chi la riceve carica quelle mancanti.
     var onRequestArtwork: (([Track], _ manual: Bool) -> Void)? = nil
@@ -118,6 +147,8 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     var dropOverlayActive = false
     /// Se presente, i brani già presenti sul dispositivo mostrano l'icona "inviato all'orologio".
     var isOnDeviceCheck: ((Track) -> Bool)? = nil
+    /// Numero di versione dell'indice dei file del dispositivo: cambia quando cambiano i brani sul dispositivo.
+    var deviceRevision = 0
     /// Come sopra, per le intestazioni di playlist (file playlist già sul dispositivo).
     /// Se vero, nella scheda Playlist i singoli brani non si selezionano: si sceglie solo la playlist intera
     /// (lato dispositivo, dove una playlist si elimina insieme ai suoi brani).
@@ -174,6 +205,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     var controlsAreDisabled = false
     /// Vista allineata a destra sulla riga delle schede (es. il selettore della libreria).
     var categoryAccessoryView: AnyView? = nil
+    /// Scheda extra dopo le categorie (2.4 Internal: Podcast del dispositivo): divisore + pulsante; scelta, mostra `extraContentView` al posto dell'elenco.
+    var extraTab: CatalogExtraTab? = nil
+    var extraContentView: AnyView? = nil
     /// Ricerca nella barra del titolo: se presente, il testo sta nel view model e il pannello non ha più il suo campo.
     var externalSearch: Binding<String>? = nil
     var externalCustomSearch: Binding<String>? = nil
@@ -186,6 +220,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// Filtro per genere musicale (menu accanto alla ricerca), attivo solo se il pannello lo abilita con `genreFilter()`.
     /// Nil = tutti i generi; la chiave è il genere senza maiuscole/spazi ("" = brani senza genere).
     var genreFilterEnabled = false
+    /// Pulsante «Alfabetico / Data di aggiunta» accanto alle schede, nella scheda Album del pannello Music (2.4). Non nel
+    /// pannello del dispositivo: i brani sull'orologio non hanno una data di aggiunta.
+    var showsAlbumOrderSwitch = false
     /// Posizionamento da tastiera solo sulla prima lettera (librerie remote e su unità esterne, dove ogni scorrimento è lento).
     var typeAheadFirstLetterOnly = false
     /// Miniature degli artisti: scaricarle da Apple Music solo per la libreria locale (default no). Librerie remote, unità esterne
@@ -234,7 +271,12 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// Esito della scansione delle copertine per brano: true = senza copertina.
     @State private var coverScan: [Track.ID: Bool] = [:]
     @State private var coverScanTask: Task<Void, Never>?
+    /// Album (album|artista) per cui il controllo completo ha già dato «senza copertina», con l'ora: i brani seguenti dello stesso album
+    /// non rifanno la chiamata a Musica, e la memoria resta fra una scansione e l'altra (10 minuti, o finché cambia il numero di brani).
+    @State private var albumsWithoutCover: [String: Date] = [:]
     @State private var isScanningCovers = false
+    /// Brani già controllati dalla scansione completa (per il messaggio con l'elenco ancora vuoto).
+    @State private var coverScanProgress = 0
     @State private var albumsLetters = ScrollLetterTracker()
     @State private var artistsLetters = ScrollLetterTracker()
     /// Selezione nativa (indipendente da `selection`) della scheda Custom Playlist: deve essere la
@@ -244,8 +286,85 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// invece dell'evidenziazione blu di sistema, come nelle altre schede.
     @State private var customPlaylistSelection = Set<UUID>()
     @State private var customSelectionAnchor: UUID?
-    /// Riga radice della Custom Playlist aperta/chiusa.
-    @State private var customExpanded = true
+    /// Riga radice della Custom Playlist: sempre aperta (la freccia per comprimerla è stata tolta, 2.4 Internal).
+    private let customExpanded = true
+    /// Posizione del titolo nella riga del nome della Custom Playlist (icona 14 pt + 8 pt di spazio): da qui parte anche il numero
+    /// dei brani, allineato a sinistra con il titolo.
+    private var customIndent: CGFloat { compactPane ? 18 : 22 }
+    /// Larghezza della colonna del numero dei brani (più larga con tre o quattro cifre): le copertine partono dopo di essa.
+    private func customNumberWidth(forCount count: Int) -> CGFloat {
+        let digits = String(max(count, 1)).count
+        return compactPane ? max(12, CGFloat(digits) * 6 + 2) : max(14, CGFloat(digits) * 6.5 + 4)
+    }
+    /// Spazio tra la colonna del numero e la copertina per l'altoparlante del brano in riproduzione: come nelle altre liste, sta a 19 pt
+    /// a sinistra della copertina (`playingIndicator.offset(x: -19)`).
+    private var customSpeakerSlot: CGFloat { compactPane ? 15 : 19 }
+    /// Finestra stretta (metà pannello < 720 pt) nella Custom Playlist: tutte le colonne della riga si stringono (spazi, badge, tempi, «km N»).
+    private var tightCustom: Bool { category == .customPlaylist && compactPane }
+    /// Sequenza dei blocchi (temporanea, solo per la Custom aperta): fino a 6 valori che si ripetono; il numero a sinistra dei brani
+    /// riparte da 1 a ogni blocco. Campi vuoti ignorati; tutti vuoti = numerazione sequenziale 1…N.
+    @State private var customSequenceFields = Array(repeating: "", count: 6)
+    @State private var showSequenceEditor = false
+    /// «Tempo progressivo» (temporaneo, Custom aperta): al posto della durata, il tempo a cui parte ogni brano (il primo da 0:00).
+    @State private var customRollingTime = false
+    /// «Brano a metà» (temporaneo, Custom aperta): velo colorato sul brano in cui cade la metà della durata totale della playlist.
+    @State private var customShowMid = false
+    /// PacePro (temporaneo, Custom aperta): frazioni della gara (distanza in km e passo m:ss al km), fino a 12; con «Km per brano» attivo
+    /// ogni riga mostra il km a cui parte il brano, l'etichetta «km N» sul brano in cui si supera ogni chilometro e il brano del traguardo.
+    @State private var customShowKm = false
+    @State private var customPaceDist = Array(repeating: "", count: 12)
+    @State private var customPacePace = Array(repeating: "", count: 12)
+    /// Minuti tra l'inizio della musica e il via della gara (0 = si parte insieme).
+    @State private var customPaceDelay = "0"
+
+    /// Informazioni PacePro di una riga: km di partenza del brano, chilometri interi superati durante il brano, traguardo, tooltip.
+    struct PaceRowInfo {
+        var start: String
+        var crossings: [Int] = []
+        var finish = false
+        var help = ""
+    }
+    private struct PaceSegment { let dist: Double; let sec: Double }
+
+    private static func parseKm(_ text: String) -> Double? { Double(text.replacingOccurrences(of: ",", with: ".")) }
+    /// Passo «m:ss» (o solo minuti) in secondi per km.
+    private static func parsePace(_ text: String) -> Double? {
+        let parts = text.split(separator: ":", omittingEmptySubsequences: false)
+        if parts.count == 1, let m = Double(parts[0]) { return m * 60 }
+        if parts.count == 2, let m = Int(parts[0]), let sec = Int(parts[1]), sec < 60 { return Double(m * 60 + sec) }
+        return nil
+    }
+    /// Frazioni valide (distanza e passo entrambi compilati e maggiori di zero), nell'ordine inserito.
+    private func paceSegments() -> [PaceSegment] {
+        var out: [PaceSegment] = []
+        for i in 0..<customPaceDist.count {
+            guard let d = Self.parseKm(customPaceDist[i]), d > 0, let p = Self.parsePace(customPacePace[i]), p > 0 else { continue }
+            out.append(PaceSegment(dist: d, sec: p))
+        }
+        return out
+    }
+    private var paceDelaySeconds: Double { max(0, (Self.parseKm(customPaceDelay) ?? 0) * 60) }
+    /// Km raggiunto dopo `t` secondi di gara (nil prima del via non si usa; nil dopo il traguardo).
+    private static func raceKm(at t: Double, _ segs: [PaceSegment]) -> Double? {
+        var cumT = 0.0, cumD = 0.0
+        for s in segs {
+            let end = cumT + s.dist * s.sec
+            if t < end { return cumD + (t - cumT) / s.sec }
+            cumT = end; cumD += s.dist
+        }
+        return nil
+    }
+    /// Secondi di gara a cui si raggiunge il km `k` (nil oltre la distanza totale).
+    private static func raceTime(atKm k: Double, _ segs: [PaceSegment]) -> Double? {
+        var cumT = 0.0, cumD = 0.0
+        for s in segs {
+            if k <= cumD + s.dist { return cumT + (k - cumD) * s.sec }
+            cumT += s.dist * s.sec; cumD += s.dist
+        }
+        return nil
+    }
+    private static func kmText(_ km: Double) -> String { km.formatted(.number.precision(.fractionLength(1))) }
+    private var customSequence: [Int] { customSequenceFields.compactMap { Int($0) }.filter { $0 >= 1 } }
     /// Colore di sfondo delle righe selezionate (scelto in Impostazioni con un color picker).
     @ObservedObject private var settings = AppSettings.shared
 
@@ -259,6 +378,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
          artworkRevision: Int = 0,
          artworkProvider: ((Track) async -> Data?)? = nil,
          artworkOriginProvider: ((Track) async -> ArtworkOrigin)? = nil,
+         artworkOriginConfirmProvider: ((Track) async -> ArtworkOrigin)? = nil,
          onPlay: ((Track, [Track], PlaybackSource?) -> Void)? = nil,
          playingTrackID: Track.ID? = nil,
          player: PlayerService? = nil,
@@ -275,6 +395,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         self.artworkRevision = artworkRevision
         self.artworkProvider = artworkProvider
         self.artworkOriginProvider = artworkOriginProvider
+        self.artworkOriginConfirmProvider = artworkOriginConfirmProvider
         self.onPlay = onPlay
         self.playingTrackID = playingTrackID
         self.player = player
@@ -340,9 +461,10 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         return copy
     }
 
-    func onDeviceCheck(_ check: @escaping (Track) -> Bool) -> Self {
+    func onDeviceCheck(revision: Int = 0, _ check: @escaping (Track) -> Bool) -> Self {
         var copy = self
         copy.isOnDeviceCheck = check
+        copy.deviceRevision = revision
         return copy
     }
 
@@ -369,6 +491,13 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     func onRequestArtwork(_ handler: @escaping ([Track], _ manual: Bool) -> Void) -> Self {
         var copy = self
         copy.onRequestArtwork = handler
+        return copy
+    }
+
+    func addExtraTab<V: View>(_ tab: CatalogExtraTab, @ViewBuilder content: () -> V) -> Self {
+        var copy = self
+        copy.extraTab = tab
+        copy.extraContentView = tab.isSelected ? AnyView(content()) : nil
         return copy
     }
 
@@ -404,6 +533,13 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     func genreFilter() -> Self {
         var copy = self
         copy.genreFilterEnabled = true
+        return copy
+    }
+
+    /// Abilita il pulsante «Alfabetico / Data di aggiunta» della scheda Album (solo pannello Music).
+    func albumOrderSwitch() -> Self {
+        var copy = self
+        copy.showsAlbumOrderSwitch = true
         return copy
     }
 
@@ -513,19 +649,40 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                         .frame(width: 1, height: 16)
                         .padding(.horizontal, 8)
                 }
-                Button { category = c } label: {
+                Button { category = c; extraTab?.deselect() } label: {
                     HStack(spacing: 5) {
                         Image(systemName: c.iconName)
                         if !compactPane { Text(c.title).lineLimit(1).minimumScaleFactor(0.85) }
                     }
                     .help(c.title)
                     .frame(width: width, height: 24)
-                    .background(category == c ? Color.primary.opacity(0.14) : Color.clear,
+                    .background(category == c && extraTab?.isSelected != true ? Color.primary.opacity(0.14) : Color.clear,
                                 in: RoundedRectangle(cornerRadius: 6))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(category == c ? .isSelected : [])
+            }
+            if let extra = extraTab {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.25))
+                    .frame(width: 1, height: 16)
+                    .padding(.horizontal, 8)
+                Button { extra.select() } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: extra.iconName)
+                        if !compactPane { Text(extra.title).lineLimit(1).minimumScaleFactor(0.85) }
+                    }
+                    .help(extra.title)
+                    // La scheda extra si adatta al testo (con un po' d'aria ai lati) invece di avere la larghezza fissa delle altre.
+                    .padding(.horizontal, compactPane ? 0 : 10)
+                    .frame(minWidth: width, minHeight: 24)
+                    .background(extra.isSelected ? Color.primary.opacity(0.14) : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 6))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(extra.isSelected ? .isSelected : [])
             }
         }
         .padding(2)
@@ -536,13 +693,15 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// Selettore delle schede + ricerca (o nome/ordinamento nella Custom Playlist).
     private var controls: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+            // Spazio fra schede, pillola della Custom e controllo a destra: lo stesso (4 pt) nei due punti.
+            HStack(spacing: 4) {
                 // Schede e filtro genere si disattivano (dispositivo senza musica); il controllo a destra
                 // (`categoryAccessory`: libreria, Eject, Connetti…) resta sempre attivo.
                 Group {
                     categoryBar
                     // Filtro per genere: attaccato a destra delle schede (Custom compresa), non più sulla riga della ricerca.
                     if genreFilterEnabled, category != .customPlaylist, category != .playlists, !genreList.isEmpty { genreMenu }
+                    if showsAlbumOrderSwitch, category == .albums { albumOrderButton }
                     // «Artista in evidenza» (2.3 Beta 2): pillola con due pulsanti a sola icona (brano / artista, la scelta resta
                     // evidenziata) e, come terzo segmento, l'ordinamento della Custom Playlist.
                     if category == .customPlaylist, let customPlaylist {
@@ -554,8 +713,13 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                     }
                 }
                 .disabled(controlsAreDisabled)
-                Spacer(minLength: 4)
-                if let categoryAccessoryView { categoryAccessoryView.fixedSize() }
+                // Spacer e controllo a destra in un solo gruppo: lo spazio minimo a sinistra del controllo è quello dell'HStack (4 pt),
+                // uguale a quello fra schede e pillola. Il controllo si stringe in larghezza (solo il selettore libreria, vedi
+                // ContentView) invece di uscire dal riquadro: così il margine a destra resta uguale a quello a sinistra.
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    if let categoryAccessoryView { categoryAccessoryView.fixedSize(horizontal: false, vertical: true) }
+                }
             }
 
             // Ricerca + (a destra) i controlli del pannello: la ricerca occupa lo spazio che resta.
@@ -614,11 +778,140 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 .help(artist ? t("tooltip_custom_artist_first") : t("tooltip_custom_title_first"))
                 .accessibilityAddTraits(settings.customArtistFirst == artist ? .isSelected : [])
             }
+            sequenceButton
             sortMenu(customPlaylist)
         }
         .padding(2)
         .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
         .fixedSize()
+    }
+
+    /// Pulsante della sequenza dei blocchi (stessa forma dei vicini, 30 × 24 pt): apre il pannello con i sei campi. Con una sequenza
+    /// attiva ha il fondo nel colore di selezione. Solo visivo: non cambia l'ordine dei brani.
+    private var sequenceButton: some View {
+        let active = !customSequence.isEmpty || customRollingTime || customShowMid || customShowKm
+        return Button { showSequenceEditor.toggle() } label: {
+            Image(systemName: "figure.run")
+                .foregroundStyle(active ? Color.black : Color.primary)
+                .frame(width: 30, height: 24)
+                .background(active ? settings.highlightColor : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(t("tooltip_custom_sequence"))
+        .popover(isPresented: $showSequenceEditor, arrowEdge: .bottom) { sequenceEditor }
+    }
+
+    private var sequenceEditor: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(t("custom_sequence_title")).font(.headline)
+            Text(t("custom_sequence_hint")).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                ForEach(0..<6, id: \.self) { i in
+                    TextField("", text: $customSequenceFields[i])
+                        .multilineTextAlignment(.center)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 46)
+                }
+            }
+            HStack {
+                Spacer()
+                Button(t("custom_sequence_reset")) { customSequenceFields = Array(repeating: "", count: 6) }
+                    .disabled(customSequence.isEmpty && customSequenceFields.allSatisfy { $0.isEmpty })
+            }
+            Divider()
+            Toggle(t("custom_rolling_time"), isOn: $customRollingTime)
+                .toggleStyle(.switch)
+                .help(t("custom_rolling_time_help"))
+            Toggle(t("custom_show_mid"), isOn: $customShowMid)
+                .toggleStyle(.switch)
+                .help(t("custom_show_mid_help"))
+            Divider()
+            Text(t("custom_pace_title")).font(.headline)
+            Toggle(t("custom_pace_show_km"), isOn: $customShowKm)
+                .toggleStyle(.switch)
+                .help(t("custom_pace_show_km_help"))
+            Text(t("custom_pace_hint")).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            // 4 righe da 3 frazioni: il tasto Tab segue l'ordine di lettura (1 distanza, 1 passo, 2 distanza, 2 passo, 3…), come l'ordine delle
+            // frazioni; con due colonne affiancate il cursore saltava da una colonna all'altra.
+            VStack(spacing: 4) {
+                ForEach(0..<4, id: \.self) { row in
+                    HStack(spacing: 10) {
+                        ForEach(0..<3, id: \.self) { col in paceCell(row * 3 + col) }
+                    }
+                }
+            }
+            HStack(spacing: 6) {
+                Text(t("custom_pace_delay")).font(.caption)
+                TextField("0", text: $customPaceDelay)
+                    .multilineTextAlignment(.center)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 46)
+                Spacer()
+                Button(t("custom_pace_clear")) {
+                    customPaceDist = Array(repeating: "", count: 12)
+                    customPacePace = Array(repeating: "", count: 12)
+                    customPaceDelay = "0"
+                }
+                .disabled(paceSegments().isEmpty && customPaceDelay == "0"
+                          && customPaceDist.allSatisfy { $0.isEmpty } && customPacePace.allSatisfy { $0.isEmpty })
+            }
+            // Altezza fissa (due righe, anche vuota): se il pannello cambiasse altezza mentre si scrive, macOS lo riposizionerebbe
+            // (la finestrella saltava sotto il pulsante).
+            Text(paceSummary().isEmpty ? " " : paceSummary())
+                .font(.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .topLeading)
+        }
+        .padding(14)
+        .frame(width: 450)
+        .onChange(of: customPaceDist) { _, new in
+            let cleaned = new.map { String($0.filter { $0.isNumber || $0 == "," || $0 == "." }.prefix(6)) }
+            if cleaned != new { customPaceDist = cleaned }
+        }
+        .onChange(of: customPacePace) { _, new in
+            let cleaned = new.map { String($0.filter { $0.isNumber || $0 == ":" }.prefix(5)) }
+            if cleaned != new { customPacePace = cleaned }
+        }
+        .onChange(of: customPaceDelay) { _, new in
+            let cleaned = String(new.filter { $0.isNumber || $0 == "," || $0 == "." }.prefix(4))
+            if cleaned != new { customPaceDelay = cleaned }
+        }
+        .onChange(of: customSequenceFields) { _, new in
+            // Solo cifre, al massimo tre.
+            let cleaned = new.map { String($0.filter(\.isNumber).prefix(3)) }
+            if cleaned != new { customSequenceFields = cleaned }
+        }
+    }
+
+    /// Una frazione PacePro (numero, distanza in km, passo m:ss al km).
+    private func paceCell(_ i: Int) -> some View {
+        HStack(spacing: 4) {
+            Text("\(i + 1)").font(.caption).foregroundStyle(.secondary).frame(width: 16, alignment: .trailing)
+            TextField("km", text: $customPaceDist[i])
+                .multilineTextAlignment(.center)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 56)
+            TextField("m:ss", text: $customPacePace[i])
+                .multilineTextAlignment(.center)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 50)
+        }
+    }
+
+    /// Riga di riepilogo del pannello: distanza e tempo della gara, durata della playlist, differenza.
+    private func paceSummary() -> String {
+        let segs = paceSegments()
+        guard !segs.isEmpty else { return "" }
+        let km = segs.reduce(0.0) { $0 + $1.dist }
+        let sec = segs.reduce(0.0) { $0 + $1.dist * $1.sec }
+        let playlist = (customPlaylist?.entries ?? []).reduce(0.0) { $0 + max(0, $1.track.duration) }
+        var text = t("custom_pace_summary", Self.kmText(km), formatDuration(sec), playlist > 0 ? formatDuration(playlist) : "0:00")
+        let diff = sec + paceDelaySeconds - playlist
+        if diff >= 1 { text += t("custom_pace_short", formatDuration(diff)) }
+        else if diff <= -1 { text += t("custom_pace_longer", formatDuration(-diff)) }
+        return text
     }
 
     /// «Ordina per» della Custom Playlist come pulsante a menu con icona (come il filtro genere): grigia con l'ordine manuale,
@@ -671,6 +964,36 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         case .random: return Color.black
         case .trackName, .artist, .album: return settings.selectionSolidColor
         }
+    }
+
+    /// Digitazione per saltare nell'elenco (Brani, Album, Artisti). Nella scheda Album con l'ordine per data di aggiunta è spenta:
+    /// l'elenco non è in ordine alfabetico, quindi digitare le lettere non darebbe risultati coerenti.
+    private func typeAheadAvailable(for category: CatalogCategory) -> Bool {
+        guard [.songs, .albums, .artists].contains(category) else { return false }
+        return !(category == .albums && albumsByDate)
+    }
+
+    /// Ordine per data di aggiunta attivo: solo nel pannello che ha il pulsante (Music); nel pannello del dispositivo, dove i
+    /// brani non hanno una data di aggiunta, gli album restano sempre in ordine alfabetico, senza etichette di periodo.
+    private var albumsByDate: Bool { showsAlbumOrderSwitch && settings.albumOrder == .dateAdded }
+
+    /// Interruttore a un solo pulsante per l'ordine della scheda Album (2.4: è l'unico controllo, la riga «Visualizza Album» di Impostazioni è tolta; la scelta si ricorda): «Abc» con l'ordine
+    /// alfabetico, «calendario» (nel colore di selezione) con l'ordine per data di aggiunta; il clic passa all'altro.
+    private var albumOrderButton: some View {
+        let byDate = albumsByDate
+        return HStack(spacing: 2) {
+            Button { settings.albumOrder = byDate ? .alphabetical : .dateAdded } label: {
+                Image(systemName: byDate ? "calendar" : "textformat.abc")
+                    .foregroundStyle(byDate ? settings.selectionSolidColor : Color.primary)
+                    .frame(width: 30, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(byDate ? t("tooltip_album_order_date") : t("tooltip_album_order_alpha"))
+        }
+        .padding(2)
+        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+        .fixedSize()
     }
 
     /// Filtro per genere (2.3 Beta 2): stessa pillola dell'ordinamento della Custom (un solo segmento, 30 × 24 pt su fondo tenue), con
@@ -728,6 +1051,15 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
 
     @ViewBuilder
     private var content: some View {
+        if let extraContentView, extraTab?.isSelected == true {
+            extraContentView
+        } else {
+            catalogContent
+        }
+    }
+
+    @ViewBuilder
+    private var catalogContent: some View {
         ZStack {
             if isLive(.songs) {
                 songsList
@@ -759,7 +1091,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         }
         .onAppear {
             visitedCategories.insert(category)
-            typeAheadMonitor.enabled = [.songs, .albums, .artists].contains(category)
+            typeAheadMonitor.enabled = typeAheadAvailable(for: category)
             typeAheadMonitor.hasText = !typeAheadText.isEmpty
             typeAheadMonitor.firstLetterOnly = typeAheadFirstLetterOnly
             let monitor = typeAheadMonitor
@@ -775,7 +1107,13 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             visitedCategories.insert(new)
             typeAheadText = ""
             typeAheadMonitor.text = ""
-            typeAheadMonitor.enabled = [.songs, .albums, .artists].contains(new)
+            typeAheadMonitor.enabled = typeAheadAvailable(for: new)
+        }
+        // Album per data di aggiunta: la digitazione si spegne (vedi `typeAheadAvailable`) e si riaccende tornando all'alfabetico.
+        .onChange(of: albumsByDate) { _, _ in
+            typeAheadText = ""
+            typeAheadMonitor.text = ""
+            typeAheadMonitor.enabled = typeAheadAvailable(for: category)
         }
     }
 
@@ -845,12 +1183,28 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 }
             }
             .overlay { ScrollLetterBubble(model: songsLetters.model, typed: typeAheadText) }
-            .overlay { emptyOverlay(items.isEmpty && !isScanningCovers) }
+            .overlay {
+                if onlyWithoutCover, items.isEmpty {
+                    // Filtro «senza copertina» attivo e nessun brano (ancora, o del tutto): senza una riga su cui fare click destro non
+                    // c'era modo di spegnerlo. Durante la scansione si vede l'avanzamento (l'indicatore in alto stava sotto la barra).
+                    VStack(spacing: 10) {
+                        if isScanningCovers {
+                            ProgressView().controlSize(.small)
+                            Text(t("without_cover_scanning", coverScanProgress, tracks.count)).foregroundStyle(.secondary)
+                        } else {
+                            Text(t("without_cover_none")).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        }
+                        Button(t("without_cover_show_all")) { onlyWithoutCover = false }
+                    }.padding()
+                } else {
+                    emptyOverlay(items.isEmpty && !isScanningCovers)
+                }
+            }
             .overlay(alignment: .top) {
                 if isScanningCovers { ProgressView().controlSize(.small).padding(8) }
             }
             .onChange(of: onlyWithoutCover) { _, _ in rescanCovers() }
-            .onChange(of: tracks.count) { _, _ in if onlyWithoutCover { rescanCovers() } }
+            .onChange(of: tracks.count) { _, _ in albumsWithoutCover = [:]; if onlyWithoutCover { rescanCovers() } }
             // Una copertina caricata/confermata: si ricontrollano solo i brani ancora «senza» e il filtro si riapplica
             // (il brano che ora ha la copertina esce dall'elenco, il conteggio scende).
             .onChange(of: artworkRevision) { _, _ in if onlyWithoutCover { rescanCovers(incremental: true) } }
@@ -858,7 +1212,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             .onChange(of: typeAheadEvent) { _, event in
                 guard category == .songs, let event else { return }
                 handleTypeAhead(event, entries: items.map { ($0.id, $0.title) }, rowOffset: Self.typeAheadSongRowOffset, proxy: proxy,
-                                fastScroll: typeAheadFirstLetterOnly ? nil : { index in directScrollSongs(toItem: index, total: items.count) })
+                                fastScroll: { index in directScrollSongs(toItem: index, total: items.count) })
             }
             }
     }
@@ -924,7 +1278,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 .replacingOccurrences(of: "\u{2018}", with: "'")
             let trimmed = String(head.drop(while: { $0.isWhitespace }))
             var n = matchLength(Array(trimmed))
-            if n < typed.count, let article = Self.leadingArticles.first(where: { trimmed.hasPrefix($0) }) {
+            if !typeAheadFirstLetterOnly, n < typed.count, let article = Self.leadingArticles.first(where: { trimmed.hasPrefix($0) }) {
                 let rest = trimmed.dropFirst(article.count).drop(while: { $0.isWhitespace })
                 n = max(n, matchLength(Array(rest)))
             }
@@ -984,11 +1338,20 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     }
 
     private func directScrollTable(view: NSView?, rowCount: Int, wantedRow: Int) -> Bool {
+        DirectScrollResult.exact = false
         guard let view, let root = view.window?.contentView else { return false }
         let center = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
-        guard let scrollView = ListScrollHandle.scrollViews(in: root, containing: center)
-                .first(where: { ($0.documentView as? NSTableView)?.numberOfRows == rowCount }),
+        let candidates = ListScrollHandle.scrollViews(in: root, containing: center)
+        // Conteggio righe atteso = quello della tabella; con molti gruppi aperti può differire di qualche riga (righe create a ondate,
+        // dischi, intestazioni): in quel caso si usa la tabella sotto la lista e la riga cercata si scala in proporzione.
+        var wantedRow = wantedRow
+        guard let scrollView = candidates.first(where: { ($0.documentView as? NSTableView)?.numberOfRows == rowCount })
+                ?? candidates.first(where: { ($0.documentView as? NSTableView).map { $0.numberOfRows > 0 } ?? false }),
               let table = scrollView.documentView as? NSTableView else { return false }
+        if table.numberOfRows != rowCount {
+            AppLog.debug("[scorrimento] conteggio righe diverso: atteso \(rowCount), tabella \(table.numberOfRows); riga \(wantedRow) scalata")
+            wantedRow = Int((Double(wantedRow) * Double(table.numberOfRows) / Double(max(rowCount, 1))).rounded())
+        }
         let clip = scrollView.contentView
         let minY = -scrollView.contentInsets.top
         let maxY = max(minY, table.bounds.height - clip.bounds.height + scrollView.contentInsets.bottom)
@@ -998,12 +1361,14 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         // Build 32: la riga `wanted` va subito sotto i pannelli sovrapposti (la riga ancora più su resta visibile).
         let inset = table.rect(ofRow: 0).height
         var y = max(minY, min(CGFloat(wanted) * average - inset, maxY))
+        var reached = false
+        defer { DirectScrollResult.exact = reached && rows == rowCount }
         for _ in 0..<5 {
             clip.setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: y))
             scrollView.reflectScrolledClipView(clip)
             let readY = min(max(y + inset + 4, 0), table.bounds.height - 1)
             let actual = table.row(at: NSPoint(x: table.bounds.midX, y: readY))
-            if actual < 0 || actual == wanted { break }
+            if actual < 0 || actual == wanted { reached = (actual == wanted); break }
             let next = max(minY, min(y + CGFloat(wanted - actual) * average, maxY))
             if abs(next - y) < 1 { break }
             y = next
@@ -1369,13 +1734,19 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 // Album e Artisti: come nella 2.2 (DisclosureGroup annidati, righe della tabella native).
                 ForEach(groups) { group in
                     DisclosureGroup(isExpanded: expandedBinding(group.id)) {
-                        if group.subgroups.isEmpty {
+                        // 2.4: il contenuto si costruisce solo per i gruppi aperti. Prima SwiftUI lo valutava per tutti i gruppi a ogni
+                        // passata (con 3.974 album, migliaia di scansioni dei brani a ogni clic).
+                        if !expandedGroups.contains(group.id) {
+                            EmptyView()
+                        } else if group.subgroups.isEmpty {
                             legacyAlbumTrackRows(group, numbered: listCategory == .albums)
                         } else {
                             // Scheda Artisti: Artista → Album → Brani dell'album.
                             ForEach(group.subgroups) { album in
                                 DisclosureGroup(isExpanded: expandedBinding(album.id)) {
-                                    legacyAlbumTrackRows(album, numbered: true)
+                                    if expandedGroups.contains(album.id) {
+                                        legacyAlbumTrackRows(album, numbered: true)
+                                    }
                                 } label: {
                                     legacyAlbumHeader(album)
                                 }
@@ -1435,7 +1806,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                         index = Int(Double(row) / Double(numberOfRows) * Double(groups.count))
                     }
                     let shown = groups[max(0, min(index, groups.count - 1))]
-                    if listCategory == .albums, settings.albumOrder == .dateAdded { return periodLabel(of: shown) }
+                    if listCategory == .albums, albumsByDate { return periodLabel(of: shown) }
                     return Self.initial(of: shown.title)
                 }
             }
@@ -1451,7 +1822,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             let tracker = listCategory == .albums ? albumsLetters : artistsLetters
             // Scorrimento diretto della tabella (build 29-33) solo con la libreria Local; librerie remote e unità esterne: scrollTo come nella 2.2.
             handleTypeAhead(event, entries: groups.map { ($0.id, $0.title) }, rowOffset: Self.revealRowOffset, proxy: proxy,
-                            fastScroll: typeAheadFirstLetterOnly ? nil : { index in directScrollGroups(groups, toGroup: index, tracker: tracker) })
+                            fastScroll: { index in directScrollGroups(groups, toGroup: index, tracker: tracker) })
         }
         // Il gruppo in riproduzione (playlist, artista o album) si apre da solo, così si vedono i suoi brani e quello in corso.
         // e la lista scorre fino al brano in corso (utile con playlist lunghe).
@@ -1473,7 +1844,13 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             warnIfWholePlaylistBecamePartial(from: old, to: new)
             noticeIfPlaylistCompletedBySongs(from: old, to: new)
         }
-        .onChange(of: selection) { _, _ in if isPlaylists { reconcilePlaylistPicks() } }
+        .onChange(of: selection) { _, _ in
+            if isPlaylists { reconcilePlaylistPicks() }
+            // 2.4: con molti gruppi aperti, un clic su un brano o su un album (cambio di selezione) faceva ricostruire la tabella
+            // (righe 1.474 → 446, contenuto 41.981 → 13.456 pt) e la lista restava spostata verso l'alto di migliaia di punti.
+            // Si ripristina la posizione come per l'apertura/chiusura; vale solo se il cambio viene da un clic o da un tasto.
+            else if isActive, listCategory == .albums || listCategory == .artists { ListScrollHandle.keepPositionAfterToggle() }
+        }
         .onChange(of: playingSource) { _, _ in if isActive { expandPlayingGroup(in: groups, proxy: proxy) } }
         // Espandendo un gruppo si caricano le copertine mancanti di ciò che compare: i brani di una
         // playlist o di un album, gli album di un artista (un brano per album basta per la miniatura).
@@ -1506,49 +1883,52 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     // della 2.3 è solo per le Playlist.
 
     /// Intestazione di un artista o di un album (scheda Album/Artisti), come nella 2.2.
+    /// `isGroupOnDevice` in memoria per gruppo (vedi `CatalogDerivedCache.onDevice`).
+    private func cachedGroupOnDevice(_ group: TrackGroup<Track>) -> Bool {
+        if derived.onDeviceRevision != deviceRevision || derived.onDeviceCount != tracks.count
+            || derived.onDeviceFirstID != tracks.first?.id || derived.onDeviceLastID != tracks.last?.id {
+            derived.onDevice = [:]
+            derived.onDeviceRevision = deviceRevision
+            derived.onDeviceCount = tracks.count
+            derived.onDeviceFirstID = tracks.first?.id
+            derived.onDeviceLastID = tracks.last?.id
+        }
+        if let cached = derived.onDevice[group.id], cached.count == group.tracks.count { return cached.value }
+        let value = isGroupOnDevice(group.tracks)
+        derived.onDevice[group.id] = (group.tracks.count, value)
+        return value
+    }
+
+    /// Valori da cui dipende il disegno di un'intestazione (vedi `GroupHeaderContent`): confrontati tra due passate, se sono uguali
+    /// SwiftUI non rifà il corpo dell'intestazione.
+    private func headerKey(_ group: TrackGroup<Track>, style: GroupHeaderContent<Track>.Style, showArtwork: Bool) -> GroupHeaderContent<Track>.Key {
+        let state: SelectToggleIcon.State
+        if selection.isEmpty { state = .none }
+        else if isGroupFullySelected(group, false) { state = .all }
+        else { state = group.tracks.contains(where: { isPicked(group, $0, false) }) ? .partial : .none }
+        let showsDevice = isPlaylistOnDeviceCheck != nil || isOnDeviceCheck != nil
+        return GroupHeaderContent<Track>.Key(
+            style: style, id: group.id, title: group.title, subtitle: subtitleText(group),
+            firstTrackID: group.tracks.first?.id, hasSubgroups: !group.subgroups.isEmpty, showArtwork: showArtwork,
+            selection: state, purchased: groupStats(group).purchased,
+            onDevice: showsDevice && cachedGroupOnDevice(group), showsDeviceColumn: showsDevice,
+            artworkRevision: artworkRevision, textPoints: settings.listTextSize.points,
+            secondaryPoints: settings.listTextSize.secondaryPoints, lineSpacing: settings.listTextSize.lineSpacing,
+            fetchOnline: settings.autoLoadAppleArtwork && downloadsArtistThumbnails,
+            thumbSize: style == .group ? Self.artistCoverSize : Self.albumInArtistCoverSize,
+            hasArtworkProvider: artworkProvider != nil)
+    }
+
+    /// Intestazione di un artista o di un album (scheda Album/Artisti), come nella 2.2.
+    /// 2.4: il disegno sta in `GroupHeaderContent`, che SwiftUI salta se i valori non sono cambiati (con migliaia di gruppi,
+    /// rifare tutte le intestazioni a ogni ridisegno della lista costava fino a 2 s). Clic e menu restano qui, fuori dal confronto.
     @ViewBuilder
     private func legacyGroupLabel(_ group: TrackGroup<Track>, showArtwork: Bool) -> some View {
-        HStack {
-            // Selezione a sinistra (vuota = invisibile, solo ingombro), stato: tutto / parziale.
-            let selectedCount = group.tracks.filter { isPicked(group, $0, false) }.count
-            SelectToggleIcon(state: isGroupFullySelected(group, false) ? .all
-                             : (selectedCount > 0 ? .partial : .none), isGroup: true) {
-                toggleGroupSelection(group, false)
-            }
-            if showArtwork, let first = group.tracks.first {
-                ArtworkThumbnail(track: first, provider: artworkProvider, version: artworkRevision, size: 32,
-                                 placeholderSymbol: "music.quarternote.3")
-            } else if !group.subgroups.isEmpty {
-                // 2.3 Beta 3, scheda Artisti: tre livelli con miniatura (Artista → Album → Brani). Per ora il riquadro
-                // dell'artista è vuoto, della stessa dimensione della miniatura degli album (`artistCoverSize`); in seguito
-                // vi comparirà la foto dell'artista.
-                // (`ArtistCoverBox` mostra la miniatura se c'è, già in cache o scaricata da Apple Music; altrimenti resta vuoto.)
-                ArtistCoverBox(name: group.id == "compilations" ? "" : group.title, size: Self.artistCoverSize,
-                               fetchOnline: settings.autoLoadAppleArtwork && downloadsArtistThumbnails,
-                               isCompilations: group.id == "compilations")
-            }
-            VStack(alignment: .leading, spacing: settings.listTextSize.lineSpacing) {
-                Text(group.title).font(.system(size: settings.listTextSize.points)).fontWeight(.medium).lineLimit(1)
-                Text(subtitleText(group)).font(.system(size: settings.listTextSize.secondaryPoints)).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer()
-            purchasedBadge(count: group.tracks.filter(\.isPurchased).count)
-            // Ultima colonna a destra: già sul dispositivo (freccia verde). Spazio fisso per l'allineamento con i brani.
-            if isPlaylistOnDeviceCheck != nil || isOnDeviceCheck != nil {
-                Group {
-                    if isGroupOnDevice(group.tracks) {
-                        Image(systemName: "arrow.right.circle.fill")
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, statusIconGreen)
-                            .help(t("artwork_group_on_device"))
-                    } else {
-                        Color.clear
-                    }
-                }
-                .font(.system(size: 14))
-                .frame(width: 24, alignment: .center)
-            }
-        }
+        let key = headerKey(group, style: .group, showArtwork: showArtwork)
+        GroupHeaderContent<Track>(key: key,
+                                  firstTrack: group.tracks.first, provider: artworkProvider,
+                                  onToggle: { toggleGroupSelection(group, false) })
+        .equatable()
         .contentShape(Rectangle())
         // Click singolo sull'intestazione: come la spunta, inverte la selezione dell'intero gruppo;
         // il secondo click ravvicinato avvia la riproduzione (vedi `ClickTracker`).
@@ -1561,43 +1941,20 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         })
         // Click destro sull'intestazione: gli invii e la ricerca copertine agiscono sull'intero gruppo.
         .contextMenu {
-            contextMenuItems(isSelected: isGroupFullySelected(group, false), artworkTracks: { group.tracks }, groupName: group.title, sendIDs: { menuSendIDs(forGroup: group) }) { toggleGroupSelection(group, false) }
+            // 2.4: le voci si costruiscono solo quando il menu si apre (`LazyMenuContent`), non a ogni ridisegno della lista.
+            LazyMenuContent {
+                contextMenuItems(isSelected: isGroupFullySelected(group, false), artworkTracks: { group.tracks }, groupArtistTrack: group.tracks.first, groupName: group.title, sendIDs: { menuSendIDs(forGroup: group) }) { toggleGroupSelection(group, false) }
+            }
         }
     }
 
     /// Intestazione di un album dentro un artista (scheda Artisti), come nella 2.2.
+    @ViewBuilder
     private func legacyAlbumHeader(_ album: TrackGroup<Track>) -> some View {
-        HStack {
-            let selectedCount = album.tracks.filter { isPicked(album, $0, false) }.count
-            SelectToggleIcon(state: isGroupFullySelected(album, false) ? .all
-                             : (selectedCount > 0 ? .partial : .none), isGroup: true) {
-                toggleGroupSelection(album, false)
-            }
-            if let first = album.tracks.first {
-                ArtworkThumbnail(track: first, provider: artworkProvider, version: artworkRevision, size: Self.albumInArtistCoverSize,
-                                 placeholderSymbol: "music.quarternote.3")
-            }
-            VStack(alignment: .leading, spacing: settings.listTextSize.lineSpacing) {
-                Text(album.title).font(.system(size: settings.listTextSize.points)).lineLimit(1)
-                Text(subtitleText(album)).font(.system(size: settings.listTextSize.secondaryPoints)).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer()
-            purchasedBadge(count: album.tracks.filter(\.isPurchased).count)
-            if isPlaylistOnDeviceCheck != nil || isOnDeviceCheck != nil {
-                Group {
-                    if isGroupOnDevice(album.tracks) {
-                        Image(systemName: "arrow.right.circle.fill")
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, statusIconGreen)
-                            .help(t("artwork_group_on_device"))
-                    } else {
-                        Color.clear
-                    }
-                }
-                .font(.system(size: 14))
-                .frame(width: 24, alignment: .center)
-            }
-        }
+        GroupHeaderContent<Track>(key: headerKey(album, style: .album, showArtwork: true),
+                                  firstTrack: album.tracks.first, provider: artworkProvider,
+                                  onToggle: { toggleGroupSelection(album, false) })
+        .equatable()
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded {
             if handleRangeClick(group: album, track: nil, isPlaylists: false) { return }
@@ -1607,7 +1964,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             }
         })
         .contextMenu {
-            contextMenuItems(isSelected: isGroupFullySelected(album, false), artworkTracks: { album.tracks }, groupName: album.title, sendIDs: { menuSendIDs(forGroup: album) }) { toggleGroupSelection(album, false) }
+            LazyMenuContent {
+                contextMenuItems(isSelected: isGroupFullySelected(album, false), artworkTracks: { album.tracks }, groupArtistTrack: album.tracks.first, groupName: album.title, sendIDs: { menuSendIDs(forGroup: album) }) { toggleGroupSelection(album, false) }
+            }
         }
     }
 
@@ -1868,10 +2227,28 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         let scrollTop = groups[max(0, topIndex - Self.revealRowOffset)].id
         // Le righe annidate dentro i gruppi aperti da codice non sono raggiungibili con `scrollTo`: si scorre fino al gruppo
         // di primo livello (album, o artista), ripetendo perché l'apertura cambia l'altezza della lista.
+        // 2.4: come per la digitazione, si porta direttamente la tabella AppKit alla posizione (`scrollTo` con migliaia di righe
+        // stima male le altezze e la lista finiva lontano dall'artista); `scrollTo` resta come ripiego. Si ripete perché
+        // l'apertura dei gruppi cambia l'altezza della lista.
+        let tracker = category == .artists ? artistsLetters : albumsLetters
+        let targetIndex = max(0, topIndex - 2)
+        // Con molti gruppi già aperti le righe si creano a ondate e il conteggio atteso può non coincidere subito con quello
+        // della tabella (lo spostamento diretto allora non parte): si riprova fino a 3,3 s e `scrollTo` resta solo come ultimo ripiego.
         Task { @MainActor in
-            for delay in [300_000_000, 500_000_000] as [UInt64] {
+            let delays: [UInt64] = [300_000_000, 400_000_000, 600_000_000, 800_000_000, 1_200_000_000]
+            var everMoved = false
+            for (attempt, delay) in delays.enumerated() {
                 try? await Task.sleep(nanoseconds: delay)
-                withAnimation { proxy.scrollTo(scrollTop, anchor: .top) }
+                let moved = directScrollGroups(groups, toGroup: targetIndex, tracker: tracker)
+                everMoved = everMoved || moved
+                // Posizione raggiunta con la tabella già allineata allo stato atteso: basta così. Ripetere lo spostamento
+                // dopo che le altezze si sono assestate faceva oscillare la lista di 150–500 pt tra un tentativo e l'altro.
+                let settled = moved && DirectScrollResult.exact
+                AppLog.debug("[prestazioni] Vai a: tentativo \(attempt + 1) — gruppo \(topIndex + 1) di \(groups.count): \(moved ? "spostamento diretto" : "tabella non riconosciuta")")
+                if settled { break }
+                if !moved, attempt == delays.count - 1, !everMoved {
+                    withAnimation { proxy.scrollTo(scrollTop, anchor: .top) }
+                }
             }
         }
     }
@@ -2074,7 +2451,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// Go to Album/Artist, Find Similar, Show in playlist). Su playlist, artista o album: solo i due invii, riferiti a quell'elemento.
     /// Gli invii sostituiscono la selezione con l'elemento cliccato (brano, oppure la selezione se il brano ne fa parte).
     @ViewBuilder
-    private func contextMenuItems(isSelected: Bool, artworkTracks: @escaping () -> [Track], goTo: Track? = nil, membershipTrack: Track? = nil, similarSeeds: [Track]? = nil, full: Bool = false, focusTrack: Track? = nil, groupName: String? = nil, sendCountHint: Int? = nil, sendIDs: @escaping () -> Set<Track.ID>, toggle: @escaping () -> Void) -> some View {
+    private func contextMenuItems(isSelected: Bool, artworkTracks: @escaping () -> [Track], goTo: Track? = nil, groupArtistTrack: Track? = nil, membershipTrack: Track? = nil, similarSeeds: [Track]? = nil, full: Bool = false, focusTrack: Track? = nil, groupName: String? = nil, sendCountHint: Int? = nil, sendIDs: @escaping () -> Set<Track.ID>, toggle: @escaping () -> Void) -> some View {
         if let menu = rowMenu {
             // Invio: agisce sull'elemento cliccato (brano, o gruppo intero), non sulla selezione precedente.
             // La selezione viene sostituita da quell'elemento e poi si usano le stesse azioni dei pulsanti in basso.
@@ -2139,6 +2516,15 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                         .labelStyle(.titleAndIcon)
                 }
                 .disabled(sendCount == 0 || menu.isBusy)
+            }
+
+            // Intestazione di un album (scheda Album): «Go to Artist» usando il primo brano dell'album.
+            if !full, let groupArtistTrack, category == .albums {
+                Divider()
+                Button { reveal(groupArtistTrack, in: .artists) } label: {
+                    Label(t("menu_go_to_artist"), systemImage: "microphone.dynamic.on.stand")
+                        .labelStyle(.titleAndIcon)
+                }
             }
 
             // Menu completo solo su un brano; su playlist, artista, album solo gli invii e la ricerca copertine.
@@ -2341,27 +2727,123 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         // La selezione la teniamo noi (`customPlaylistSelection`) e la disegniamo col colore scelto in Impostazioni, come nelle altre schede.
         // Click: seleziona; ⌘-click: aggiunge/toglie; ⇧-click: intervallo. Il riordino (`.onMove`) non ne ha bisogno.
         let order = shown.map(\.id)
+        let indent = customIndent
+        let numberWidth = customNumberWidth(forCount: config.entries.count)
+        // Numerazione visiva: sequenziale oppure a blocchi (vedi `customSequence`); calcolata sulla playlist intera, anche con la ricerca attiva.
+        let pattern = customSequence
+        var numberingBuilt: [UUID: (number: Int, group: Int)] = [:]
+        do {
+            var group = 0, index = 0, n = 0
+            for (position, entry) in config.entries.enumerated() {
+                if pattern.isEmpty { numberingBuilt[entry.id] = (position + 1, 0); continue }
+                if n == pattern[index % pattern.count] { n = 0; index += 1; group += 1 }
+                n += 1
+                numberingBuilt[entry.id] = (n, group)
+            }
+        }
+        let numbering = numberingBuilt
+        // Tempi: inizio di ogni brano (somma delle durate dei precedenti) e brano in cui cade la metà della durata totale.
+        var startsBuilt: [UUID: TimeInterval] = [:]
+        var midBuilt: UUID?
+        do {
+            let total = config.entries.reduce(0.0) { $0 + max(0, $1.track.duration) }
+            let half = total / 2
+            var cumulative = 0.0
+            for entry in config.entries {
+                startsBuilt[entry.id] = cumulative
+                let d = max(0, entry.track.duration)
+                if midBuilt == nil, total > 0, cumulative <= half, half < cumulative + d { midBuilt = entry.id }
+                cumulative += d
+            }
+        }
+        let startTimes = startsBuilt
+        let midID = midBuilt
+        // PacePro: km a cui parte ogni brano, chilometri interi superati durante il brano, brano del traguardo, tempo che manca.
+        var paceBuilt: [UUID: PaceRowInfo] = [:]
+        var finishBuilt: UUID?
+        var missingBuilt = 0.0
+        do {
+            let segs = paceSegments()
+            if customShowKm, !segs.isEmpty {
+                let delay = paceDelaySeconds
+                let totalKm = segs.reduce(0.0) { $0 + $1.dist }
+                let totalSec = segs.reduce(0.0) { $0 + $1.dist * $1.sec }
+                let all = config.entries
+                var starts: [Double] = [], ends: [Double] = []
+                for e in all {
+                    let st = startTimes[e.id] ?? 0
+                    starts.append(st); ends.append(st + max(0, e.track.duration))
+                }
+                for (i, e) in all.enumerated() {
+                    let t0 = starts[i] - delay
+                    var text = ""
+                    if t0 < 0 { text = "—" }
+                    else if let km = Self.raceKm(at: t0, segs) { text = Self.kmText(km) + (compactPane ? "" : " km") }
+                    paceBuilt[e.id] = PaceRowInfo(start: text)
+                }
+                var j = 0
+                if totalKm >= 1 {
+                    for k in 1...Int(totalKm) {
+                        guard let tk = Self.raceTime(atKm: Double(k), segs) else { break }
+                        let at = tk + delay
+                        while j < all.count, ends[j] <= at { j += 1 }
+                        if j < all.count, starts[j] <= at {
+                            paceBuilt[all[j].id]?.crossings.append(k)
+                            let line = t("custom_pace_cross_help", k, formatDuration(tk))
+                            let old = paceBuilt[all[j].id]?.help ?? ""
+                            paceBuilt[all[j].id]?.help = old.isEmpty ? line : old + "\n" + line
+                        }
+                    }
+                }
+                let finishAt = totalSec + delay
+                var jf = 0
+                while jf < all.count, ends[jf] <= finishAt { jf += 1 }
+                if jf < all.count, starts[jf] <= finishAt {
+                    finishBuilt = all[jf].id
+                    paceBuilt[all[jf].id]?.finish = true
+                    let line = t("custom_pace_finish_help", formatDuration(totalSec))
+                    let old = paceBuilt[all[jf].id]?.help ?? ""
+                    paceBuilt[all[jf].id]?.help = old.isEmpty ? line : old + "\n" + line
+                }
+                missingBuilt = max(0, finishAt - (ends.last ?? 0))
+            }
+        }
+        let paceInfo = paceBuilt
+        let finishID = finishBuilt
+        let missing = missingBuilt
+        // Riga del brano in riproduzione: i suoi dettagli vanno al mini player (solo quella riga, per non pesare sulle liste lunghe).
+        var playingInfo: CustomPlayInfo?
+        if let playingTrackID, let entry = config.entries.first(where: { $0.track.id == playingTrackID }) {
+            let pi = paceInfo[entry.id]
+            playingInfo = CustomPlayInfo(
+                trackID: String(describing: entry.track.id),
+                number: numbering[entry.id]?.number ?? 0,
+                rolling: customRollingTime ? rollingText(startTimes[entry.id] ?? 0) : nil,
+                kmStart: pi?.start,
+                crossings: pi?.crossings ?? [],
+                finish: pi?.finish ?? false,
+                isMid: customShowMid && entry.id == midID,
+                help: pi?.help ?? "")
+        }
         return List {
             GlassInsetRow(edge: .top)
             // Riga radice dell'albero: sempre presente (anche a elenco vuoto), con il nome
             // modificabile al posto del vecchio campo "Name". Non è selezionabile (nessun tag).
             HStack(spacing: 8) {
-                Button {
-                    withAnimation { customExpanded.toggle() }
-                } label: {
-                    Image(systemName: "chevron.right")
-                        .rotationEffect(.degrees(customExpanded ? 90 : 0))
-                        .frame(width: 14)
-                }
-                .buttonStyle(.borderless)
                 Image(systemName: CatalogCategory.customPlaylist.iconName)
                     .foregroundStyle(.secondary)
+                    .frame(width: indent - 8)   // icona di larghezza fissa: il titolo parte a `indent`, dove iniziano le copertine
                 TextField(t("custom_playlist_name_placeholder"), text: Binding(
                     get: { config.name },
                     set: { config.onNameChange($0) }
                 ))
                 .textFieldStyle(.plain)
                 .font(.headline)
+                if missing >= 1 {
+                    // PacePro: la playlist finisce prima del traguardo.
+                    Text(t("custom_pace_missing_header", formatDuration(missing)))
+                        .font(.caption).foregroundStyle(.orange).lineLimit(1).fixedSize()
+                }
                 // Come l'app Musica: «N brani, X ore e Y minuti» (senza secondi).
                 // + dimensione totale dei file in GB («1042 tracks, 78 hours, 7 minutes / 5,3 GB»).
                 Text(customPlaylistHeaderText(config.entries.map(\.track)))
@@ -2374,7 +2856,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 if config.entries.isEmpty {
                     Text(t("custom_playlist_empty_hint"))
                         .foregroundStyle(.secondary)
-                        .padding(.leading, 22)
+                        .padding(.leading, indent)
                 }
                 ForEach(shown) { entry in
                     let artistKey = entry.track.artist.trimmingCharacters(in: .whitespaces).lowercased()
@@ -2384,7 +2866,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                         album: (artistKey.isEmpty || albumKey.isEmpty) ? 0 : (albumCounts[artistKey + "\u{1}" + albumKey] ?? 0),
                         sameTrack: trackCounts[String(describing: entry.track.id)] ?? 0,
                         slotArtist: slotArtist, slotAlbum: slotAlbum, slotTrack: slotTrack)
-                    trackRow(entry.track, selectionOnLeft: false, artistFirst: artistFirst, repeats: repeats) {
+                    trackRow(entry.track, selectionOnLeft: false, artistFirst: artistFirst, repeats: repeats,
+                             durationText: customRollingTime ? rollingText(startTimes[entry.id] ?? 0) : nil,
+                             paceInfo: paceInfo[entry.id]) {
                         Button {
                             config.onRemove(entry.id)
                         } label: {
@@ -2394,14 +2878,28 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                         .foregroundStyle(.secondary)
                         .help(t("tooltip_remove_from_custom_playlist"))
                     }
-                    .padding(.leading, 22)
+                    .padding(.leading, indent + numberWidth + customSpeakerSlot)   // numero (sotto l'inizio del titolo), poi l'altoparlante, poi la copertina
+                    .overlay(alignment: .leading) {
+                        // Numero del brano (posizione, o posizione nel blocco con una sequenza attiva), allineato a sinistra con il titolo
+                        // della playlist. L'altoparlante del brano in riproduzione sta tra il numero e la copertina, come nelle altre liste.
+                        Text("\(numbering[entry.id]?.number ?? 0)")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1).minimumScaleFactor(0.7)
+                            .frame(width: numberWidth, alignment: .leading)
+                            .padding(.leading, indent)
+                            .allowsHitTesting(false)
+                    }
                     .tag(entry.id)
                     .contentShape(Rectangle())   // build 45: senza selezione nativa, il click deve funzionare su tutta la riga
                     // Doppio click avvia il brano, con la Custom Playlist stessa (nell'ordine
                     // attuale) come coda e come sorgente per i controlli del mini player.
                     .simultaneousGesture(TapGesture(count: 2).onEnded { if !entry.track.isDeviceOnly { onPlay?(entry.track, queue, source) } })
                     .simultaneousGesture(TapGesture().onEnded { selectCustomRow(entry.id, order: order) })
-                    .listRowBackground(customPlaylistSelection.contains(entry.id) ? rowHighlight(settings.highlightColor) : nil)
+                    .listRowBackground(customRowBackground(selected: customPlaylistSelection.contains(entry.id),
+                                                           finish: entry.id == finishID,
+                                                           mid: customShowMid && entry.id == midID,
+                                                           tinted: !pattern.isEmpty && (numbering[entry.id]?.group ?? 0) % 2 == 1))
                 }
                 // Il riordino è disattivato mentre si filtra con la ricerca (indici non corrispondenti).
                 .onMove(perform: customQuery.isEmpty ? { source, destination in
@@ -2418,6 +2916,23 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         }
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
+        .onChange(of: playingInfo, initial: true) { _, new in CustomPlayInfoStore.shared.info = new }
+        .onDisappear { CustomPlayInfoStore.shared.info = nil }
+    }
+
+    /// Tempo progressivo come «m:ss» o «h:mm:ss»; zero = «0:00» (il primo brano parte da 0).
+    private func rollingText(_ seconds: TimeInterval) -> String {
+        seconds < 0.5 ? "0:00" : formatDuration(seconds)
+    }
+
+    /// Sfondo di una riga della Custom: colore di selezione, oppure (con una sequenza attiva) un velo sui blocchi alterni, oppure nulla.
+    @ViewBuilder
+    private func customRowBackground(selected: Bool, finish: Bool, mid: Bool, tinted: Bool) -> some View {
+        if selected { rowHighlight(settings.highlightColor) }
+        else if finish { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.green.opacity(0.22)).padding(.horizontal, 4) }
+        else if mid { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.orange.opacity(0.22)).padding(.horizontal, 4) }
+        else if tinted { RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.secondary.opacity(0.10)).padding(.horizontal, 4) }
+        else { Color.clear }
     }
 
     /// Selezione della Custom (build 45): click, ⌘-click (aggiunge/toglie), ⇧-click (intervallo dall'ultima riga cliccata).
@@ -2455,24 +2970,24 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// stesso artista. Sempre attivi nella Custom Playlist.
     @ViewBuilder
     private func repeatBadges(_ r: CustomRepeats) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: tightCustom ? 2 : 4) {
             if r.slotTrack {
                 if r.sameTrack >= 2 { badge("doc.on.doc.fill", r.sameTrack, color: .orange, help: t("custom_dup_track_help", r.sameTrack)) }
-                else { Color.clear.frame(width: Self.badgeWidth, height: 1) }
+                else { Color.clear.frame(width: badgeWidth, height: 1) }
             }
             if r.slotAlbum {
                 if r.album >= 2 { badge("square.stack", r.album, color: .secondary, help: t("custom_dup_album_help", r.album)) }
-                else { Color.clear.frame(width: Self.badgeWidth, height: 1) }
+                else { Color.clear.frame(width: badgeWidth, height: 1) }
             }
             if r.slotArtist {
                 if r.artist >= 2 { badge("person.fill", r.artist, color: .secondary, help: t("custom_dup_artist_help", r.artist)) }
-                else { Color.clear.frame(width: Self.badgeWidth, height: 1) }
+                else { Color.clear.frame(width: badgeWidth, height: 1) }
             }
         }
     }
 
     /// Larghezza fissa di ogni indicatore (icona + «×» + fino a due cifre): non cambia passando da 9 a 10.
-    private static var badgeWidth: CGFloat { 46 }
+    private var badgeWidth: CGFloat { tightCustom ? 38 : 46 }
 
     private func badge(_ icon: String, _ count: Int, color: Color, help: String) -> some View {
         HStack(spacing: 2) {
@@ -2482,7 +2997,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         .font(.caption.monospacedDigit())   // come la durata del brano
         .foregroundStyle(color)
         .lineLimit(1).minimumScaleFactor(0.8)
-        .frame(width: Self.badgeWidth, height: 16)
+        .frame(width: badgeWidth, height: 16)
         .background(color.opacity(0.15), in: Capsule())
         .help(help)
     }
@@ -2496,9 +3011,10 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     /// annidarne un secondo attorno a questa vista.
     @ViewBuilder
     private func trackRow<Trailing: View>(_ track: Track, number: String? = nil, insideAlbum: Bool = false, selectionOnLeft: Bool = true,
-                                          artistFirst: Bool = false, repeats: CustomRepeats? = nil,
+                                          artistFirst: Bool = false, repeats: CustomRepeats? = nil, durationText: String? = nil,
+                                          paceInfo: PaceRowInfo? = nil,
                                           @ViewBuilder trailing: () -> Trailing) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: tightCustom ? 6 : 10) {
             if let number {
                 // Dentro un album: il numero di traccia al posto della copertina.
                 Text(number)
@@ -2524,7 +3040,8 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                     Text(differing).font(.system(size: settings.listTextSize.secondaryPoints)).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
-            Spacer()
+            .frame(minWidth: tightCustom ? 40 : nil, alignment: .leading)   // finestra stretta: il titolo non sparisce, si tronca
+            Spacer(minLength: tightCustom ? 0 : nil)
             if let repeats, repeats.hasAny { repeatBadges(repeats) }
             if let warning = track.warning {
                 // Brano non trasferibile (es. solo nel cloud): niente icone né selezione, solo l'avviso
@@ -2544,6 +3061,10 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                     .background(isHiRes ? Color(red: 1.0, green: 0.757, blue: 0.027) : Color.orange.opacity(0.25), in: Capsule())
                     .foregroundStyle(isHiRes ? Color.black : Color.orange)
                 }
+            } else if category == .customPlaylist {
+                // Custom Playlist: niente colonne di icone (borsa «acquistato», origine della copertina, «già sul dispositivo»):
+                // lo spazio va al titolo e gli indicatori di ripetizione scorrono verso destra.
+                EmptyView()
             } else if let originProvider = artworkOriginProvider {
                 // Colonne di icone strette, a 1 pt l'una dall'altra (il resto della riga ha 10 pt di spaziatura).
                 HStack(spacing: 1) {
@@ -2581,7 +3102,8 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                     .font(.system(size: 14))
                     .frame(width: 20)
                 }
-                if category != .playlists, let lookup = playlistsContainingTrack {
+                if category != .playlists, category != .customPlaylist, let lookup = playlistsContainingTrack {
+                    // (Non nella Custom Playlist: lì il brano sta quasi sempre in qualche playlist, l'icona non serve e occupa spazio.)
                     // Quarta colonna: il brano è inserito in almeno una playlist (quali, lo dice il menu contestuale).
                     // Spazio fisso, per l'allineamento anche dei brani che non stanno in nessuna playlist.
                     Group {
@@ -2607,7 +3129,42 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             // Durata del brano: subito a sinistra del riquadro di selezione (cifre a larghezza fissa, allineate a
             // destra, così la colonna resta ordinata).
             // Durata del brano: subito a sinistra del riquadro di selezione.
-            durationLabel(track)
+            if let paceInfo {
+                // PacePro (Custom Playlist): bandierina del traguardo, «km N» del chilometro superato in questo brano, km di partenza.
+                HStack(spacing: 4) {
+                    // Colonna di larghezza fissa (anche vuota) per «km N» e la bandierina: le altre icone non si spostano da una riga all'altra.
+                    HStack(spacing: 3) {
+                        if paceInfo.finish {
+                            Image(systemName: "flag.checkered")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(Color.green)
+                                .frame(height: 16)   // più grande ma con l'altezza di «km N»: la riga non cresce
+                        }
+                        if let first = paceInfo.crossings.first, let last = paceInfo.crossings.last {
+                            Text(first == last ? "km \(first)" : "km \(first)–\(last)")
+                                .font(.caption.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(Color.teal)
+                                .lineLimit(1).minimumScaleFactor(0.75)
+                                .padding(.horizontal, tightCustom ? 4 : 6).frame(height: 16)
+                                .background(Color.teal.opacity(0.18), in: Capsule())
+                        }
+                    }
+                    .frame(width: tightCustom ? 58 : 66, alignment: .trailing)
+                    Text(paceInfo.start)
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(width: tightCustom ? 30 : 46, alignment: .trailing)
+                }
+                .help(paceInfo.help)
+            }
+            if let durationText {
+                // «Tempo progressivo» (Custom Playlist): al posto della durata, l'istante in cui parte il brano.
+                Text(durationText)
+                    .font(.caption.monospacedDigit()).foregroundStyle(settings.selectionSolidColor)
+                    .frame(minWidth: tightCustom ? 32 : 36, alignment: .trailing)
+            } else {
+                durationLabel(track)
+            }
             if selectionOnLeft {
                 // Ultima colonna a destra (al posto della vecchia selezione): «già sul dispositivo» (freccia) oppure
                 // «solo sul dispositivo» (orologio), sempre verdi. Larghezza fissa, anche vuota, per l'incolonnamento.
@@ -2634,14 +3191,14 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             } else {
                 // Accessorio finale (es. rimuovi dalla Custom Playlist): ultimo elemento a destra, colonna fissa.
                 trailing()
-                    .frame(width: 24, alignment: .center)
+                    .frame(width: tightCustom ? 20 : 24, alignment: .center)
             }
         }
         // L'altoparlante del brano in riproduzione sta nel margine sinistro della riga, fuori dal flusso:
         // il titolo non si sposta rispetto agli altri brani.
         .overlay(alignment: .leading) {
             if let playingTrackID, playingTrackID == track.id {
-                playingIndicator.offset(x: -19)
+                playingIndicator.offset(x: tightCustom ? -15 : -19)
             }
         }
     }
@@ -2714,7 +3271,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     private func durationLabel(_ track: Track) -> some View {
         Text(track.duration > 0 ? formatDuration(track.duration) : "")
             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            .frame(minWidth: 36, alignment: .trailing)
+            .frame(minWidth: tightCustom ? 32 : 36, alignment: .trailing)
     }
 
     /// Indicatore del brano caricato nel mini player: altoparlante che in riproduzione pulsa da blu chiaro a
@@ -2791,16 +3348,29 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             return
         }
         let snapshot = incremental ? tracks.filter { coverScan[$0.id] != false } : tracks
-        if !incremental { isScanningCovers = true }
+        let confirm = artworkOriginConfirmProvider
+        if !incremental { isScanningCovers = true; coverScanProgress = 0 }
         coverScanTask = Task {
             // Si parte dall'esito precedente e lo si aggiorna brano per brano: l'elenco non si svuota né si ricarica
             // durante la scansione (selezionare un brano carica la sua copertina ma non deve far sparire righe).
             var result = coverScan
             for (i, track) in snapshot.enumerated() {
                 if Task.isCancelled { return }
-                let origin = await provider(track)
+                var origin = await provider(track)
+                // Il controllo veloce non vede la copertina di Musica né quella di un altro brano dell'album: i candidati si
+                // confermano con il controllo completo (lo stesso dell'invio), così Fix Artwork non propone brani che ce l'hanno.
+                if origin == ArtworkOrigin.none, let confirm {
+                    let albumKey = track.album.isEmpty ? nil : (track.album + "|" + track.artist).lowercased()
+                    if let albumKey, let when = albumsWithoutCover[albumKey], Date().timeIntervalSince(when) < 600 {
+                        // Un brano di questo album è già risultato senza copertina anche per Musica: le copertine sono dell'album.
+                    } else {
+                        origin = await confirm(track)
+                        if origin == ArtworkOrigin.none, let albumKey { albumsWithoutCover[albumKey] = Date() }
+                    }
+                }
                 result[track.id] = (origin == ArtworkOrigin.none)
-                if !incremental, i % 40 == 39 { coverScan = result }
+                if !incremental, i % 10 == 9 { coverScanProgress = i + 1 }
+                if !incremental, i % 20 == 19 { coverScan = result }   // i brani senza copertina compaiono man mano
             }
             if Task.isCancelled { return }
             if result != coverScan { coverScan = result }
@@ -2829,7 +3399,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             while i < n { hasher.combine(tracks[i].id); i += step }
             hasher.combine(tracks[n - 1].id)
         }
-        return "\(hasher.finalize())|\(genreKey ?? "")|\(query)|\(settings.albumOrder.rawValue)"
+        // Genere: «senza genere» è la stringa vuota e «nessun filtro» è nil: vanno distinti (prima entrambi davano "", la memoria dell'elenco
+        // non si aggiornava passando dall'uno all'altro e tornando su un'altra libreria l'elenco restava vuoto).
+        return "\(hasher.finalize())|\(genreKey.map { "g:" + $0 } ?? "-")|\(query)|\(albumsByDate)"
     }
 
     /// Brani filtrati e in ordine alfabetico per titolo (scheda Brani), in memoria finché non cambia la chiave.
@@ -2850,7 +3422,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         let key = derivedKey
         if derived.albumsKey == key { return derived.albums }
         let perfStart = Date()
-        let groups = scopedTracks.groupedByAlbum(byDateAdded: settings.albumOrder == .dateAdded)
+        let groups = scopedTracks.groupedByAlbum(byDateAdded: albumsByDate)
         AppLog.debug("[prestazioni] Elenco Album ricalcolato: \(tracks.count) brani → \(groups.count) album, \(String(format: "%.2f", Date().timeIntervalSince(perfStart))) s")
         let value = query.isEmpty ? groups : groups.filter { $0.title.localizedCaseInsensitiveContains(query) }
         derived.albumsKey = key
@@ -2933,6 +3505,97 @@ enum CustomPlaylistSortOption: String, CaseIterable, Identifiable {
         case .artist: return t("sort_by_artist")
         case .album: return t("sort_by_album")
         case .random: return t("sort_by_random")
+        }
+    }
+}
+
+/// Costruisce il contenuto solo quando SwiftUI ne richiede il corpo (per un menu contestuale: all'apertura del menu).
+private struct LazyMenuContent<Content: View>: View {
+    let build: () -> Content
+    init(@ViewBuilder _ build: @escaping () -> Content) { self.build = build }
+    var body: some View {
+        build()
+    }
+}
+
+/// Disegno di un'intestazione di artista o di album (2.4). Confronta solo i valori di `key`: se sono uguali alla passata precedente,
+/// SwiftUI non ne rifà il corpo anche quando la lista che la contiene viene rivalutata. Tutto ciò che il disegno usa deve stare in `key`.
+private struct GroupHeaderContent<Track: CatalogTrack>: View, Equatable {
+    enum Style: Equatable { case group, album }
+
+    struct Key: Equatable {
+        var style: Style
+        var id: String
+        var title: String
+        var subtitle: String
+        var firstTrackID: Track.ID?
+        var hasSubgroups: Bool
+        var showArtwork: Bool
+        var selection: SelectToggleIcon.State
+        var purchased: Int
+        var onDevice: Bool
+        var showsDeviceColumn: Bool
+        var artworkRevision: Int
+        var textPoints: CGFloat
+        var secondaryPoints: CGFloat
+        var lineSpacing: CGFloat
+        var fetchOnline: Bool
+        var thumbSize: CGFloat
+        var hasArtworkProvider: Bool
+    }
+
+    let key: Key
+    let firstTrack: Track?
+    let provider: ((Track) async -> Data?)?
+    let onToggle: () -> Void
+
+    static func == (lhs: GroupHeaderContent<Track>, rhs: GroupHeaderContent<Track>) -> Bool { lhs.key == rhs.key }
+
+    var body: some View {
+        HStack {
+            // Selezione a sinistra (vuota = invisibile, solo ingombro), stato: tutto / parziale.
+            SelectToggleIcon(state: key.selection, isGroup: true, action: onToggle)
+            switch key.style {
+            case .group:
+                if key.showArtwork, let first = firstTrack {
+                    ArtworkThumbnail(track: first, provider: provider, version: key.artworkRevision, size: 32,
+                                     placeholderSymbol: "music.quarternote.3")
+                } else if key.hasSubgroups {
+                    // Scheda Artisti: riquadro dell'artista (miniatura se c'è, già in cache o scaricata; altrimenti vuoto).
+                    ArtistCoverBox(name: key.id == "compilations" ? "" : key.title, size: key.thumbSize,
+                                   fetchOnline: key.fetchOnline, isCompilations: key.id == "compilations")
+                }
+            case .album:
+                if let first = firstTrack {
+                    ArtworkThumbnail(track: first, provider: provider, version: key.artworkRevision, size: key.thumbSize,
+                                     placeholderSymbol: "music.quarternote.3")
+                }
+            }
+            VStack(alignment: .leading, spacing: key.lineSpacing) {
+                Text(key.title).font(.system(size: key.textPoints)).fontWeight(key.style == .group ? .medium : nil).lineLimit(1)
+                Text(key.subtitle).font(.system(size: key.secondaryPoints)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            if key.purchased > 0 {
+                Image(systemName: "bag")
+                    .foregroundStyle(Color.statusNeutral)
+                    .help(t("purchased_group_help", key.purchased))
+            }
+            // Ultima colonna a destra: già sul dispositivo (freccia verde). Spazio fisso per l'allineamento con i brani.
+            if key.showsDeviceColumn {
+                Group {
+                    if key.onDevice {
+                        Image(systemName: "arrow.right.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, statusIconGreen)
+                            .help(t("artwork_group_on_device"))
+                    } else {
+                        Color.clear
+                    }
+                }
+                .font(.system(size: 14))
+                .frame(width: 24, alignment: .center)
+            }
         }
     }
 }
@@ -3020,12 +3683,16 @@ private struct PlaylistMosaic<Track: CatalogTrack>: View {
 
     @State private var images: [NSImage] = []
 
+    /// Spazio tra le quattro copertine (la «croce» del mosaico): 1 pt (prima 2, con gli angoli arrotondati delle celle sembrava più larga).
+    private static var gap: CGFloat { 1 }
+    private static var cellSize: CGFloat { (32 - gap) / 2 }
+
     var body: some View {
         Group {
             if images.count >= 4 {
-                VStack(spacing: 2) {
-                    HStack(spacing: 2) { cell(images[0]); cell(images[1]) }
-                    HStack(spacing: 2) { cell(images[2]); cell(images[3]) }
+                VStack(spacing: Self.gap) {
+                    HStack(spacing: Self.gap) { cell(images[0]); cell(images[1]) }
+                    HStack(spacing: Self.gap) { cell(images[2]); cell(images[3]) }
                 }
             } else if let first = images.first {
                 Image(nsImage: first).resizable().aspectRatio(contentMode: .fill)
@@ -3060,8 +3727,8 @@ private struct PlaylistMosaic<Track: CatalogTrack>: View {
 
     private func cell(_ image: NSImage) -> some View {
         Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-            .frame(width: 15, height: 15)
-            .clipShape(RoundedRectangle(cornerRadius: 15 * 0.18))
+            .frame(width: Self.cellSize, height: Self.cellSize)
+            .clipped()   // niente angoli arrotondati nelle celle: il mosaico ha già il suo contorno arrotondato
     }
 }
 
@@ -3532,11 +4199,11 @@ private enum ClickTracker {
 }
 
 /// Sfondo di una riga selezionata: rettangolo dagli angoli smussati (come la selezione di sistema) nel colore scelto in Impostazioni.
-private func rowHighlight(_ color: Color) -> some View {
+func rowHighlight(_ color: Color) -> some View {
     RoundedRectangle(cornerRadius: 8, style: .continuous).fill(color).padding(.horizontal, 4)
 }
 
-private struct HideNativeSelection: NSViewRepresentable {
+struct HideNativeSelection: NSViewRepresentable {
     final class Coordinator { var done = false }
     /// Se vero, la selezione nativa si toglie a ogni aggiornamento (non solo la prima volta): per le liste la cui tabella può essere ricreata.
     var reapplyOnUpdate = false
@@ -3544,13 +4211,8 @@ private struct HideNativeSelection: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { NSView() }
     func updateNSView(_ nsView: NSView, context: Context) {
         if reapplyOnUpdate, context.coordinator.done {
-            var ancestor: NSView? = nsView.superview
-            while let a = ancestor {
-                if let table = Self.firstTable(in: a) {
-                    if table.selectionHighlightStyle != .none { table.selectionHighlightStyle = .none }
-                    return
-                }
-                ancestor = a.superview
+            if let table = Self.nearestTable(to: nsView) {
+                if table.selectionHighlightStyle != .none { table.selectionHighlightStyle = .none }
             }
             return
         }
@@ -3560,15 +4222,10 @@ private struct HideNativeSelection: NSViewRepresentable {
         // altrimenti resterebbe visibile la selezione nativa (angoli smussati) sotto quella colorata.
         for delay in [0.0, 0.25, 0.8, 2.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak nsView] in
-                guard !state.done else { return }
-                var ancestor: NSView? = nsView?.superview
-                while let a = ancestor {
-                    if let table = Self.firstTable(in: a) {
-                        table.selectionHighlightStyle = .none
-                        state.done = true
-                        return
-                    }
-                    ancestor = a.superview
+                guard !state.done, let nsView else { return }
+                if let table = Self.nearestTable(to: nsView) {
+                    table.selectionHighlightStyle = .none
+                    state.done = true
                 }
             }
         }
@@ -3576,6 +4233,30 @@ private struct HideNativeSelection: NSViewRepresentable {
     private static func firstTable(in view: NSView) -> NSTableView? {
         if let t = view as? NSTableView { return t }
         for sub in view.subviews { if let t = firstTable(in: sub) { return t } }
+        return nil
+    }
+    private static func allTables(in view: NSView, into out: inout [NSTableView]) {
+        if let t = view as? NSTableView { out.append(t) }
+        for sub in view.subviews { allTables(in: sub, into: &out) }
+    }
+    /// La tabella della lista a cui questa vista fa da sfondo: risalendo, il primo antenato che contiene tabelle; se ce n'è più di una
+    /// (altre liste ancora nella gerarchia) vale quella che si sovrappone di più alla vista, così non si tocca la tabella sbagliata.
+    private static func nearestTable(to view: NSView) -> NSTableView? {
+        var ancestor: NSView? = view.superview
+        while let a = ancestor {
+            var tables: [NSTableView] = []
+            allTables(in: a, into: &tables)
+            if tables.count == 1 { return tables[0] }
+            if tables.count > 1 {
+                let mine = view.convert(view.bounds, to: nil)
+                func overlap(_ t: NSTableView) -> CGFloat {
+                    let r = t.convert(t.bounds, to: nil).intersection(mine)
+                    return r.isNull ? 0 : r.width * r.height
+                }
+                return tables.max { overlap($0) < overlap($1) }
+            }
+            ancestor = a.superview
+        }
         return nil
     }
 }
@@ -4019,6 +4700,10 @@ func customPlaylistHeaderText<T: CatalogTrack>(_ tracks: [T]) -> String {
 
 /// Diagnostica 2.3 Beta 1: misura quanto l'interfaccia resta ferma dopo un'azione. Si registra l'istante dell'azione e, appena il ciclo
 /// principale torna libero (due giri dopo, cioè dopo il ridisegno della lista), il ritardo con memoria e thread. Solo con il registro dettagliato.
+/// Esito dell'ultimo spostamento diretto della tabella: vero se la tabella aveva esattamente le righe attese e la riga cercata è finita in cima.
+@MainActor
+enum DirectScrollResult { static var exact = false }
+
 enum PerfLag {
     @MainActor static func measure(_ what: String) {
         StallWatchdog.lastAction = what

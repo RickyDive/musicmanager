@@ -259,8 +259,8 @@ private enum L {
             .en: "Check for new maps?"
         ],
         "alert_maps_recheck_message": [
-            .it: "Le mappe del dispositivo sono state controllate %@ giorni fa. Garmin le aggiorna circa ogni 3 mesi: vuoi controllare ora se ce ne sono di nuove?",
-            .en: "The device maps were last checked %@ days ago. Garmin updates them about every 3 months: do you want to check now for new ones?"
+            .it: "Le mappe del dispositivo sono state controllate %@ giorni fa. Garmin ne pubblica di nuove a più riprese: vuoi controllare ora se ce ne sono?",
+            .en: "The device maps were last checked %@ days ago. Garmin releases new ones from time to time: do you want to check now?"
         ],
         "button_check_now": [
             .it: "Controlla ora",
@@ -298,11 +298,29 @@ private enum L {
             .it: "Questa finestra serve solo a consultare le mappe. Per aggiungerle, aggiornarle o rimuoverle usa Garmin Express o le funzioni del dispositivo: Music Manager non gestisce le mappe.",
             .en: "This window is for viewing maps only. To add, update or remove them, use Garmin Express or the device's own features: Music Manager does not manage maps."
         ],
+        "tooltip_release_beta": [
+            .it: "Versione del software arrivata dal programma Garmin Beta (il server l'aveva proposta come beta pubblica)",
+            .en: "Software version that came from the Garmin Beta program (the server offered it as a public beta)"
+        ],
+        "update_notes_more": [.it: "Altre versioni…", .en: "More…"],
+        "update_notes_less": [.it: "Mostra meno", .en: "Show less"],
+        "tooltip_installed_whats_new": [
+            .it: "Novità della versione %@ (da Garmin):", .en: "What's new in version %@ (from Garmin):"
+        ],
         "tooltip_software_updated": [
             .it: "Il software del dispositivo è aggiornato", .en: "The device software is up to date"
         ],
         "tooltip_reload_library": [
             .it: "Ricarica la libreria", .en: "Reload library"
+        ],
+        "tooltip_refresh_server_changed": [
+            .it: "La libreria sul server è cambiata: aggiorna per rileggerla", .en: "The library on the server has changed: refresh to read it again"
+        ],
+        "tooltip_album_order_alpha": [
+            .it: "Album in ordine alfabetico: clic per ordinarli per data di aggiunta", .en: "Albums in alphabetical order: click to sort them by date added"
+        ],
+        "tooltip_album_order_date": [
+            .it: "Album per data di aggiunta: clic per l'ordine alfabetico", .en: "Albums by date added: click for alphabetical order"
         ],
         "search_placeholder": [
             .it: "Cerca", .en: "Search"
@@ -527,6 +545,16 @@ private enum L {
             .it: "Già in Music ma non trasferibile da lì (cloud/protetto): si userà questo file",
             .en: "Already in Music but not transferable from there (cloud/protected): this file will be used"
         ],
+        "alert_drop_duplicates_title": [
+            .it: "Brani già nella playlist «Direct Copy»", .en: "Songs already in the “Direct Copy” playlist"
+        ],
+        "alert_drop_duplicates_message": [
+            .it: "%d dei file trascinati sono già nella playlist «Direct Copy» del dispositivo. Puoi saltarli oppure aggiungerli di nuovo (la playlist li conterrà due volte).",
+            .en: "%d of the dropped files are already in the “Direct Copy” playlist on the device. You can skip them or add them again (the playlist will list them twice)."
+        ],
+        "button_skip_duplicates": [
+            .it: "Salta i duplicati", .en: "Skip duplicates"
+        ],
         "status_drop_already_listed": [
             .it: "Tutti i file trascinati sono già nella playlist «Direct Copy» del dispositivo: niente da aggiungere.",
             .en: "All dropped files are already in the “Direct Copy” playlist on the device: nothing to add."
@@ -700,6 +728,9 @@ private enum L {
         ],
         "tooltip_player_repeat": [
             .it: "Ripeti tutti i brani", .en: "Repeat all"
+        ],
+        "tooltip_player_preview": [
+            .it: "Anteprima: 15 secondi da circa il 30 % di ogni brano", .en: "Preview: 15 seconds from about 30 % of each track"
         ],
         "tooltip_player_queue": [
             .it: "Mostra i brani della playlist", .en: "Show playlist tracks"
@@ -945,14 +976,36 @@ private enum L {
             .en: "Background color for selected rows on Music's Playlists, Artists, Albums and Songs tabs."
         ],
         "tooltip_custom_title_first": [.it: "Riga principale: titolo del brano", .en: "Main line: song title"],
+        "tooltip_custom_sequence": [.it: "Sequenza dei blocchi e tempi (solo visivo)", .en: "Block sequence and times (visual only)"],
+        "custom_sequence_title": [.it: "Sequenza e tempi", .en: "Sequence and times"],
+        "custom_rolling_time": [.it: "Tempo progressivo", .en: "Rolling time"],
+        "custom_rolling_time_help": [.it: "Al posto della durata, il tempo a cui parte ogni brano (il primo da 0:00)", .en: "Instead of the song length, the time at which each song starts (the first at 0:00)"],
+        "custom_show_mid": [.it: "Brano a metà", .en: "Show mid song"],
+        "custom_mid_badge": [.it: "Metà", .en: "Mid"],
+        "custom_show_mid_help": [.it: "Evidenzia il brano in cui cade la metà della durata totale della playlist", .en: "Highlights the song where the halfway point of the whole playlist falls"],
+        "custom_sequence_hint": [
+            .it: "Fino a 6 valori che si ripetono: il numero dei brani riparte da 1 a ogni blocco. Esempio: 10 e 1 → 1…10, 1, 1…10, 1… Non cambia l'ordine della playlist. Campi vuoti: numerazione 1…N.",
+            .en: "Up to 6 values that repeat: the song number restarts at 1 in each block. Example: 10 and 1 → 1…10, 1, 1…10, 1… The playlist order does not change. Empty fields: plain 1…N numbering."
+        ],
+        "custom_pace_title": [.it: "PacePro (passo gara)", .en: "PacePro (race pace)"],
+        "custom_pace_show_km": [.it: "Km per brano", .en: "Km per song"],
+        "custom_pace_show_km_help": [.it: "Mostra il km a cui parte ogni brano, il chilometro che superi in ciascun brano e il brano del traguardo", .en: "Shows the km at which each song starts, the kilometre you pass during each song and the song of the finish"],
+        "custom_pace_hint": [
+            .it: "Frazioni del PacePro: distanza (km) e passo (m:ss al km), nell'ordine della gara. Stime: il passo reale varia.",
+            .en: "PacePro splits: distance (km) and pace (m:ss per km), in race order. Estimates: your real pace will vary."
+        ],
+        "custom_pace_delay": [.it: "Ritardo iniziale (min)", .en: "Start delay (min)"],
+        "custom_pace_clear": [.it: "Azzera PacePro", .en: "Clear PacePro"],
+        "custom_pace_summary": [.it: "Gara %@ km in %@ · playlist %@", .en: "Race %@ km in %@ · playlist %@"],
+        "custom_pace_short": [.it: " · mancano %@", .en: " · %@ short"],
+        "custom_pace_longer": [.it: " · avanzano %@", .en: " · %@ to spare"],
+        "custom_pace_missing_header": [.it: "mancano %@ al traguardo", .en: "%@ short of the finish"],
+        "custom_pace_cross_help": [.it: "Al km %d (%@ di gara) sei in questo brano", .en: "At km %d (%@ into the race) you are in this song"],
+        "custom_pace_finish_help": [.it: "Qui tagli il traguardo (%@)", .en: "You cross the finish line here (%@)"],
+        "custom_sequence_reset": [.it: "Numerazione sequenziale", .en: "Sequential numbering"],
         "tooltip_custom_artist_first": [.it: "Riga principale: artista (per riconoscere gli artisti ripetuti)", .en: "Main line: artist (to spot repeated artists)"],
-        "settings_album_order": [.it: "Visualizza Album", .en: "Show Albums"],
         "settings_album_order_alpha": [.it: "Alfabetico", .en: "Alphabetical"],
         "settings_album_order_date": [.it: "Data di aggiunta", .en: "Date added"],
-        "settings_album_order_hint": [
-            .it: "Ordine della scheda Album: alfabetico, oppure gli album aggiunti più di recente per primi (come in Apple Music). Senza data di aggiunta, gli album restano in fondo in ordine alfabetico.",
-            .en: "Order of the Albums tab: alphabetical, or most recently added albums first (like Apple Music). Albums without an added date stay at the end, alphabetically."
-        ],
         "settings_custom_artist_first": [.it: "Custom Playlist: artista in evidenza", .en: "Custom Playlist: artist first"],
         "settings_custom_artist_first_hint": [
             .it: "Nella Custom Playlist la riga principale mostra l'artista; titolo e album passano sulla riga piccola. Utile per riconoscere gli artisti ripetuti.",
@@ -1040,6 +1093,15 @@ private enum L {
         ],
         "menu_artwork_online_fix": [
             .it: "Fix Artwork online…", .en: "Artwork Online Fix…"
+        ],
+        "without_cover_scanning": [
+            .it: "Controllo delle copertine… %d di %d", .en: "Checking covers… %d of %d"
+        ],
+        "without_cover_none": [
+            .it: "Nessun brano senza copertina", .en: "No songs without cover"
+        ],
+        "without_cover_show_all": [
+            .it: "Mostra tutti i brani", .en: "Show All Songs"
         ],
         "menu_only_without_cover": [
             .it: "Mostra solo brani senza copertina", .en: "Show Only Songs without cover"
@@ -1247,12 +1309,38 @@ private enum L {
             .it: "Diagnostica copiata negli appunti. L'indirizzo dei feedback non è ancora impostato in questa versione: apri una Issue su GitHub (github.com/RickyDive/musicmanager) e incolla il testo.",
             .en: "Diagnostics copied to the clipboard. The feedback address is not set in this build: open an Issue on GitHub (github.com/RickyDive/musicmanager) and paste the text."
         ],
-        "welcome_title": [
-            .it: "Benvenuto in Music Manager", .en: "Welcome to Music Manager"
+        "welcome_dont_show": [
+            .it: "Non mostrare al prossimo avvio", .en: "Don't show at next launch"
         ],
-        "welcome_message": [
-            .it: "Grazie per aver scelto Music Manager.\n\n• Per leggere la libreria e creare playlist l'app chiederà il permesso di accedere a Music e di controllarla.\n• Non elimina brani dalla libreria di Music.\n• Le funzioni che inviano dati a Garmin (aggiornamenti software e mappe) sono spente: si attivano in Impostazioni ▸ Avanzate.\n• Se qualcosa non va: menu Aiuto ▸ Copia informazioni di diagnostica, poi Aiuto ▸ Invia feedback.",
-            .en: "Thank you for choosing Music Manager.\n\n• To read your library and create playlists the app will ask for permission to access and control Music.\n• It does not delete tracks from your Music library.\n• Features that send data to Garmin (software updates and maps) are off: you can turn them on in Settings ▸ Advanced.\n• If something goes wrong: Help menu ▸ Copy Diagnostic Information, then Help ▸ Send Feedback."
+        "welcome_hello": [
+            .it: "Benvenuto in", .en: "Welcome to"
+        ],
+        "welcome_release": [
+            .it: "Release %@", .en: "Release %@"
+        ],
+        "welcome_intro": [
+            .it: "Grazie per aver scelto Music Manager, ora con il supporto ad Apple Podcasts.",
+            .en: "Thank you for choosing Music Manager, now with Apple Podcasts support."
+        ],
+        "welcome_point_music": [
+            .it: "**Permessi.** Per leggere la libreria e creare playlist l'app chiederà il permesso di accedere a Music e di controllarla.",
+            .en: "**Permissions.** To read your library and create playlists the app will ask for permission to access and control Music."
+        ],
+        "welcome_point_safe": [
+            .it: "**Nessuna cancellazione.** Music Manager non elimina brani dalla libreria di Music.",
+            .en: "**Nothing is deleted.** Music Manager does not delete tracks from your Music library."
+        ],
+        "welcome_point_garmin": [
+            .it: "**Privacy.** Le funzioni che inviano dati a Garmin (aggiornamenti software e mappe) sono spente: si attivano in Impostazioni ▸ Avanzate.",
+            .en: "**Privacy.** Features that send data to Garmin (software updates and maps) are off: you can turn them on in Settings ▸ Advanced."
+        ],
+        "welcome_point_podcast": [
+            .it: "**Podcast.** Nella scheda Podcast del dispositivo puoi inviare gli episodi già scaricati in Apple Podcasts; serve il permesso «Accesso completo al disco», che la scheda spiega.",
+            .en: "**Podcasts.** In the Podcasts tab of the device panel you can send the episodes already downloaded in Apple Podcasts; this needs the «Full Disk Access» permission, which the tab explains."
+        ],
+        "welcome_point_help": [
+            .it: "**Se qualcosa non va:** menu Aiuto ▸ Copia informazioni di diagnostica, poi Aiuto ▸ Invia feedback.",
+            .en: "**If something goes wrong:** Help menu ▸ Copy Diagnostic Information, then Help ▸ Send Feedback."
         ],
         "about_legal_button": [
             .it: "Note legali…", .en: "Legal Notices…"
@@ -1261,8 +1349,8 @@ private enum L {
             .it: "Note legali", .en: "Legal Notices"
         ],
         "about_legal_text": [
-            .it: "Music Manager non è affiliato, sponsorizzato né approvato da Garmin Ltd. o da Apple Inc. Garmin, Apple, Apple Music e iTunes sono marchi dei rispettivi proprietari.\n\nMusic Manager è software libero: puoi ridistribuirlo e/o modificarlo secondo i termini della GNU General Public License, versione 3 o (a tua scelta) qualsiasi versione successiva. È distribuito senza alcuna garanzia. © 2026 Riccardo Colaiori, cr.developer. Il codice sorgente è su github.com/RickyDive/musicmanager: le versioni finali nella branch main, le beta nella branch beta, con il tag corrispondente alla versione dell'app.\n\nIl trasferimento verso l'orologio usa le librerie libmtp e libusb (LGPL), incluse nell'app come librerie separate (Aiuto ▸ Licenze di terze parti). La libreria musicale viene letta tramite il framework iTunesLibrary di Apple; le librerie condivise in rete vengono lette solo da un file XML esportato e da una cartella montata.",
-            .en: "Music Manager is not affiliated with, sponsored or endorsed by Garmin Ltd. or Apple Inc. Garmin, Apple, Apple Music and iTunes are trademarks of their respective owners.\n\nMusic Manager is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License, version 3 or (at your option) any later version. It comes with no warranty. © 2026 Riccardo Colaiori, cr.developer. The source code is at github.com/RickyDive/musicmanager: final releases on the main branch, betas on the beta branch, each with a tag matching the app version.\n\nTransfers to the watch use the libmtp and libusb libraries (LGPL), included in the app as separate libraries (Help ▸ Third-Party Licenses). The music library is read through Apple's iTunesLibrary framework; network-shared libraries are read only from an exported XML file and a mounted folder."
+            .it: "Music Manager non è affiliato, sponsorizzato né approvato da Garmin Ltd. o da Apple Inc. Garmin, Apple, Apple Music e iTunes sono marchi dei rispettivi proprietari.\n\nMusic Manager è software libero: puoi ridistribuirlo e/o modificarlo secondo i termini della GNU General Public License, versione 3 o (a tua scelta) qualsiasi versione successiva. È distribuito senza alcuna garanzia. © 2026 Riccardo Colaiori, cr.developer. Il codice sorgente è su github.com/RickyDive/musicmanager: le versioni finali nella branch main, le beta nella branch beta, con il tag corrispondente alla versione dell'app.\n\nIl trasferimento verso l'orologio usa le librerie libmtp e libusb (LGPL), incluse nell'app come librerie separate (Aiuto ▸ Licenze di terze parti). La libreria musicale viene letta tramite il framework iTunesLibrary di Apple; le librerie condivise in rete vengono lette solo da un file XML esportato da Musica o dal file JSON di MusicManager Server e da una cartella montata. I podcast sono letti dai file che Apple Podcasts ha già scaricato sul Mac (Music Manager non scarica nulla).",
+            .en: "Music Manager is not affiliated with, sponsored or endorsed by Garmin Ltd. or Apple Inc. Garmin, Apple, Apple Music and iTunes are trademarks of their respective owners.\n\nMusic Manager is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License, version 3 or (at your option) any later version. It comes with no warranty. © 2026 Riccardo Colaiori, cr.developer. The source code is at github.com/RickyDive/musicmanager: final releases on the main branch, betas on the beta branch, each with a tag matching the app version.\n\nTransfers to the watch use the libmtp and libusb libraries (LGPL), included in the app as separate libraries (Help ▸ Third-Party Licenses). The music library is read through Apple's iTunesLibrary framework; network-shared libraries are read only from an XML file exported by Music or from the JSON file of MusicManager Server, and a mounted folder. Podcasts are read from the files Apple Podcasts has already downloaded on the Mac (Music Manager downloads nothing)."
         ],
         "alert_random_to_manual_title": [
             .it: "Tornare all'ordine Manuale?", .en: "Go back to Manual order?"
@@ -1352,6 +1440,108 @@ private enum L {
         ],
         "tooltip_player_next": [
             .it: "Brano successivo", .en: "Next track"
+        ],
+
+        // Podcast (2.4 Internal)
+        "podcast_tab": [
+            .it: "Podcast", .en: "Podcasts"
+        ],
+        "podcast_info": [
+            .it: "Music Manager non scarica i podcast: mostra solo gli episodi già scaricati in Apple Podcasts.",
+            .en: "Music Manager does not download podcasts: it only shows the episodes already downloaded in Apple Podcasts."
+        ],
+        "podcast_reload_tooltip": [
+            .it: "Rileggi gli episodi scaricati in Apple Podcasts", .en: "Reload the episodes downloaded in Apple Podcasts"
+        ],
+        "podcast_no_library": [
+            .it: "Apple Podcasts non ha una libreria su questo Mac. Apri l'app Podcast, scarica un episodio e riprova.",
+            .en: "Apple Podcasts has no library on this Mac. Open the Podcasts app, download an episode and try again."
+        ],
+        "podcast_empty": [
+            .it: "Nessun episodio scaricato in Apple Podcasts. Scarica un episodio nell'app Podcast per inviarlo al dispositivo.",
+            .en: "No episode is downloaded in Apple Podcasts. Download an episode in the Podcasts app to send it to the device."
+        ],
+        "podcast_permission_title": [
+            .it: "Serve l'Accesso completo al disco", .en: "Full Disk Access is needed"
+        ],
+        "podcast_permission_body": [
+            .it: "Per leggere gli episodi scaricati, macOS richiede il permesso «Accesso completo al disco» per Music Manager. L'app legge soltanto una copia dell'elenco e dei file di Apple Podcasts: non li modifica e non scarica nulla. Apri le Impostazioni di Sistema, attiva Music Manager (con «+» se non è in elenco), poi chiudi e riapri l'app. Dopo un aggiornamento dell'app il permesso potrebbe dover essere rinnovato.",
+            .en: "To read the downloaded episodes, macOS requires the “Full Disk Access” permission for Music Manager. The app only reads a copy of the Apple Podcasts list and files: it does not modify them and downloads nothing. Open System Settings, turn on Music Manager (use “+” if it is not listed), then quit and reopen the app. After an app update the permission may need to be renewed."
+        ],
+        "podcast_open_settings": [
+            .it: "Apri Impostazioni di Sistema", .en: "Open System Settings"
+        ],
+        "podcast_retry": [
+            .it: "Riprova", .en: "Try again"
+        ],
+        "podcast_on_device_tooltip": [
+            .it: "Già sul dispositivo", .en: "Already on the device"
+        ],
+        "podcast_not_sendable": [
+            .it: "Non inviabile (serve un MP3 completo)", .en: "Cannot be sent (a complete MP3 is needed)"
+        ],
+        "podcast_episode_n": [
+            .it: "Puntata %d", .en: "Episode %d"
+        ],
+        "podcast_selected": [
+            .it: "%d selezionati · %@", .en: "%d selected · %@"
+        ],
+        "podcast_delete_title": [
+            .it: "Rimuovere dal dispositivo?", .en: "Remove from the device?"
+        ],
+        "podcast_delete_message": [
+            .it: "%d file verranno eliminati dal dispositivo. Non vengono toccati né Apple Podcasts né i file sul Mac.",
+            .en: "%d files will be deleted from the device. Apple Podcasts and the files on the Mac are not touched."
+        ],
+        "podcast_send": [
+            .it: "Invia", .en: "Send"
+        ],
+        "podcast_send_tooltip": [
+            .it: "Invia gli episodi selezionati al dispositivo (cartella Podcasts)", .en: "Send the selected episodes to the device (Podcasts folder)"
+        ],
+
+        "podcast_orphans_header": [
+            .it: "Solo sul dispositivo", .en: "Only on the device"
+        ],
+        "podcast_orphan_tooltip": [
+            .it: "Presente solo sul dispositivo: l'episodio non è più scaricato in Apple Podcasts", .en: "Only on the device: the episode is no longer downloaded in Apple Podcasts"
+        ],
+        "podcast_remove_menu": [
+            .it: "Rimuovi dal dispositivo", .en: "Remove from device"
+        ],
+        "podcast_device_stale": [
+            .it: "Dispositivo scollegato: le spunte riflettono l'ultimo collegamento.", .en: "Device disconnected: the checkmarks reflect the last connection."
+        ],
+        "podcast_status_none_sendable": [
+            .it: "Podcast: nessun episodio inviabile (servono file MP3 completi).", .en: "Podcasts: no episode can be sent (complete MP3 files are needed)."
+        ],
+        "podcast_status_no_device": [
+            .it: "Podcast: nessun dispositivo collegato.", .en: "Podcasts: no device connected."
+        ],
+        "podcast_status_no_space": [
+            .it: "Podcast: spazio insufficiente sul dispositivo (servono %llu MB, liberi %llu MB).",
+            .en: "Podcasts: not enough space on the device (%llu MB needed, %llu MB free)."
+        ],
+        "podcast_status_sending": [
+            .it: "Podcast: invio %d di %d — %@", .en: "Podcasts: sending %d of %d — %@"
+        ],
+        "podcast_status_sent": [
+            .it: "Podcast: %d inviati", .en: "Podcasts: %d sent"
+        ],
+        "podcast_status_already": [
+            .it: ", %d già sul dispositivo", .en: ", %d already on the device"
+        ],
+        "podcast_status_failed": [
+            .it: ", %d non riusciti", .en: ", %d failed"
+        ],
+        "podcast_status_stopped": [
+            .it: " (interrotto)", .en: " (stopped)"
+        ],
+        "podcast_status_removing": [
+            .it: "Podcast: rimozione %d di %d", .en: "Podcasts: removing %d of %d"
+        ],
+        "podcast_status_removed": [
+            .it: "Podcast: %d rimossi dal dispositivo", .en: "Podcasts: %d removed from the device"
         ],
 
         // Categorie del CatalogBrowser
@@ -1735,6 +1925,18 @@ private enum L {
             .it: "Inviando all'orologio o alla Custom Playlist brani senza copertina (libreria locale, condivisa o su unità esterna), chiede se cercarla online e apre il pannello Artwork. Richiede «Cerca copertine mancanti online» attivo.",
             .en: "When sending tracks without artwork (local, shared or external-drive library) to the watch or the Custom Playlist, asks whether to search it online and opens the Artwork panel. Requires the online artwork search to be on."
         ],
+        "settings_artwork_store": [
+            .it: "Paese dello store per le ricerche online",
+            .en: "Store country for online searches"
+        ],
+        "settings_artwork_store_auto": [
+            .it: "Automatico (%@)",
+            .en: "Automatic (%@)"
+        ],
+        "settings_artwork_store_hint": [
+            .it: "Automatico usa la regione del Mac (ora: %@). Copertine e miniature degli artisti si cercano prima nello store di questo paese (ora: %@) e, se non si trova nulla, negli Stati Uniti. Vale per tutti gli utenti, perché le copertine in cache sono comuni.",
+            .en: "Automatic uses the Mac's region (now: %@). Artwork and artist thumbnails are searched first in this country's store (now: %@) and, if nothing is found, in the United States. It applies to all users, because cached artwork is shared."
+        ],
         "artwork_proposal_title": [
             .it: "Copertine mancanti", .en: "Missing artwork"
         ],
@@ -1929,10 +2131,134 @@ private enum L {
             .it: "Locale", .en: "Local"
         ],
         "library_menu_help": [
-            .it: "Libreria da consultare: locale o remota (file XML)", .en: "Library to browse: local or remote (XML file)"
+            .it: "Libreria da consultare: locale o remota (file XML o JSON)", .en: "Library to browse: local or remote (XML or JSON file)"
         ],
         "library_none_found": [
             .it: "Nessuna libreria remota: aggiungila in Impostazioni", .en: "No remote library: add one in Settings"
+        ],
+        "settings_external_sources": [
+            .it: "Sorgenti Esterne", .en: "External Sources"
+        ],
+        "external_type_remote": [
+            .it: "Libreria in rete (XML di Musica o JSON di MusicManager Server)", .en: "Network library (Music XML or MusicManager Server JSON)"
+        ],
+        "external_type_drive": [
+            .it: "Cartella audio su unità esterna", .en: "Audio folder on an external drive"
+        ],
+        "external_add_xml": [
+            .it: "Libreria in rete (XML o JSON del Server)…", .en: "Network Library (XML or Server JSON)…"
+        ],
+        "external_add_folder": [
+            .it: "Cartella su unità esterna…", .en: "Folder on External Drive…"
+        ],
+        "external_add_help": [
+            .it: "Aggiungi una sorgente esterna", .en: "Add an external source"
+        ],
+        "external_max_hint": [
+            .it: "Massimo %d sorgenti", .en: "Up to %d sources"
+        ],
+        "profile_menu_tooltip": [
+            .it: "Utente: %@", .en: "User: %@"
+        ],
+        "profile_menu_add": [
+            .it: "Aggiungi utente…", .en: "Add User…"
+        ],
+        "profile_menu_edit": [
+            .it: "Modifica utente…", .en: "Edit User…"
+        ],
+        "profile_menu_delete": [
+            .it: "Elimina utente…", .en: "Delete User…"
+        ],
+        "profile_sheet_add_title": [
+            .it: "Nuovo utente", .en: "New User"
+        ],
+        "profile_sheet_edit_title": [
+            .it: "Modifica utente", .en: "Edit User"
+        ],
+        "profile_first_hint": [
+            .it: "Le impostazioni attuali, con i dispositivi e le librerie esterne, verranno salvate nel profilo utente «%@». Da qui in poi ogni utente ha le proprie.",
+            .en: "The current settings, with devices and external libraries, will be saved in the user profile “%@”. From now on each user has their own."
+        ],
+        "profile_nickname": [
+            .it: "Soprannome", .en: "Nickname"
+        ],
+        "profile_avatar": [
+            .it: "Immagine", .en: "Picture"
+        ],
+        "profile_avatar_symbol": [
+            .it: "Simbolo", .en: "Symbol"
+        ],
+        "profile_avatar_letter": [
+            .it: "Lettera", .en: "Letter"
+        ],
+        "profile_avatar_photo": [
+            .it: "Foto", .en: "Photo"
+        ],
+        "profile_letter_field": [
+            .it: "Lettera", .en: "Letter"
+        ],
+        "profile_choose_photo": [
+            .it: "Scegli foto…", .en: "Choose Photo…"
+        ],
+        "profile_photo_hint": [
+            .it: "Puoi anche trascinare qui un'immagine.", .en: "You can also drag an image here."
+        ],
+        "profile_start_from": [
+            .it: "Impostazioni di partenza", .en: "Starting settings"
+        ],
+        "profile_start_current": [
+            .it: "Quelle dell'utente attuale", .en: "Those of the current user"
+        ],
+        "profile_start_defaults": [
+            .it: "Predefinite", .en: "Defaults"
+        ],
+        "profile_start_hint": [
+            .it: "Partendo dall'utente attuale si copiano le impostazioni e le librerie esterne; i dispositivi memorizzati no.", .en: "Starting from the current user copies the settings and the external sources; remembered devices are not copied."
+        ],
+        "profile_create": [
+            .it: "Crea", .en: "Create"
+        ],
+        "profile_save": [
+            .it: "Salva", .en: "Save"
+        ],
+        "profile_busy_title": [
+            .it: "Operazione in corso", .en: "Operation in progress"
+        ],
+        "profile_busy_message": [
+            .it: "Cambia utente quando l'operazione in corso sarà finita.", .en: "Switch user when the current operation has finished."
+        ],
+        "profile_delete_title": [
+            .it: "Eliminare l'utente «%@»?", .en: "Delete the user “%@”?"
+        ],
+        "profile_delete_message": [
+            .it: "Le sue impostazioni, i suoi dispositivi memorizzati e le sue librerie esterne vengono cancellati. La libreria di Musica e le copertine non si toccano.", .en: "Their settings, remembered devices and external sources are deleted. The Music library and the artwork are not touched."
+        ],
+        "settings_profiles": [
+            .it: "Profili utente (sperimentale)", .en: "User profiles (experimental)"
+        ],
+        "settings_profiles_hint": [
+            .it: "Più persone con lo stesso account macOS: ognuna ha impostazioni, dispositivi e librerie esterne proprie, lingua compresa. La libreria di Musica, le copertine e la cache restano comuni. Con l'interruttore acceso compare un pulsante tondo nella barra del titolo e a destra delle schede di queste Impostazioni. Spegnendolo si torna al primo utente.", .en: "Several people sharing one macOS account: each has their own settings, devices and external sources, language included. The Music library, the artwork and the cache stay common. With the switch on, a round button appears in the title bar and to the right of the tabs of these Settings. Turning it off goes back to the first user."
+        ],
+        "device_owner_title": [
+            .it: "Dispositivo di un altro utente", .en: "Device of another user"
+        ],
+        "device_owner_message": [
+            .it: "«%@» è tra i dispositivi di %@. Vuoi passare a quell'utente? Se resti con l'utente attuale il dispositivo resta in sola lettura: nessun invio né cancellazione.", .en: "“%@” is among the devices of %@. Switch to that user? If you stay with the current user the device stays read-only: no sending and no deleting."
+        ],
+        "device_owner_switch": [
+            .it: "Passa a %@", .en: "Switch to %@"
+        ],
+        "device_owner_stay": [
+            .it: "Resta con %@ (sola lettura)", .en: "Stay with %@ (read-only)"
+        ],
+        "device_other_user_capsule": [
+            .it: "Sola lettura", .en: "Read-only"
+        ],
+        "tooltip_device_other_user": [
+            .it: "Questo dispositivo è di %@: operazioni disattivate. Passa a quell'utente o ricollega il dispositivo.", .en: "This device belongs to %@: operations are disabled. Switch to that user or reconnect the device."
+        ],
+        "status_device_other_user": [
+            .it: "Il dispositivo è di %@: operazioni disattivate (sola lettura).", .en: "The device belongs to %@: operations are disabled (read-only)."
         ],
         "settings_remote_libraries": [
             .it: "Librerie Remote", .en: "Remote Libraries"
@@ -1976,7 +2302,7 @@ private enum L {
             .it: "Percorso", .en: "Path"
         ],
         "remote_choose_button": [
-            .it: "Scegli file XML…", .en: "Choose XML file…"
+            .it: "Scegli il file…", .en: "Choose file…"
         ],
         "remote_add": [
             .it: "Aggiungi libreria", .en: "Add library"
@@ -1985,20 +2311,20 @@ private enum L {
             .it: "Massimo %d librerie", .en: "Up to %d libraries"
         ],
         "remote_choose_xml_help": [
-            .it: "Sfoglia e scegli il file XML della libreria", .en: "Browse and choose the library XML file"
+            .it: "Sfoglia e scegli il file della libreria (XML o JSON)", .en: "Browse and choose the library file (XML or JSON)"
         ],
         "remote_remove_help": [
             .it: "Rimuovi la libreria", .en: "Remove the library"
         ],
         "remote_hint": [
-            .it: "Il file XML si esporta da Musica sull'altro Mac (File ▸ Libreria ▸ Esporta libreria…); i file audio devono essere raggiungibili da questo Mac (cartella condivisa montata). Il nome compare nel selettore delle librerie della finestra principale.",
-            .en: "Export the XML file from Music on the other Mac (File ▸ Library ▸ Export Library…); the audio files must be reachable from this Mac (mounted shared folder). The nickname appears in the library picker of the main window."
+            .it: "Libreria in rete: il Mac con la musica può condividerla in due modi. Con MusicManager Server (app gratuita da installare su quel Mac) un file library.json si aggiorna da solo: scegli quel file. Oppure con Musica: sull'altro Mac esporta il file XML (File ▸ Libreria ▸ Esporta libreria…) e scegli quel file; va riesportato quando la libreria cambia. In entrambi i casi i file audio devono essere raggiungibili da questo Mac (cartella condivisa montata). Il nome compare nel selettore delle librerie della finestra principale.",
+            .en: "Network library: the Mac that holds the music can share it in two ways. With MusicManager Server (a free app to install on that Mac) a library.json file keeps itself up to date: choose that file. Or with Music: on the other Mac export the XML file (File ▸ Library ▸ Export Library…) and choose that file; it must be exported again when the library changes. Either way, the audio files must be reachable from this Mac (mounted shared folder). The nickname appears in the library picker of the main window."
         ],
         "remote_default_nickname": [
             .it: "Libreria %d", .en: "Library %d"
         ],
         "remote_phase_reading": [
-            .it: "Lettura del file XML (la prima volta può richiedere tempo)…", .en: "Reading the XML file (the first time can take a while)…"
+            .it: "Lettura del file della libreria (la prima volta può richiedere tempo)…", .en: "Reading the library file (the first time can take a while)…"
         ],
         "remote_playback_loading": [
             .it: "Caricamento dal server remoto…", .en: "Loading from the remote server…"
@@ -2048,27 +2374,33 @@ private enum L {
             .en: "Music Manager is closing the remote libraries. The app will quit by itself in a few seconds."
         ],
         "remote_phase_copying": [
-            .it: "Copia dell'XML: %@ di %@ MB (%@)", .en: "Copying the XML: %@ of %@ MB (%@)"
+            .it: "Copia del file: %@ di %@ MB (%@)", .en: "Copying the file: %@ of %@ MB (%@)"
+        ],
+        "remote_phase_copy_waiting": [
+            .it: "Copia del file: %@ di %@ MB — in attesa dei dati dalla rete (%d s)…",
+            .en: "Copying the file: %@ of %@ MB — waiting for data from the network (%d s)…"
+        ],
+        "remote_phase_copy_done": [
+            .it: "Copia completata: %@ MB in %d s", .en: "Copy complete: %@ MB in %d s"
         ],
         "remote_err_stalled": [
-            .it: "Trasferimento dell'XML interrotto: nessun dato ricevuto da %d secondi. Controlla la connessione (VPN, rete) e riprova.",
-            .en: "XML transfer stopped: no data received for %d seconds. Check the connection (VPN, network) and try again."
+            .it: "Trasferimento del file interrotto: nessun dato ricevuto da %d secondi. Controlla la connessione (VPN, rete) e riprova.",
+            .en: "File transfer stopped: no data received for %d seconds. Check the connection (VPN, network) and try again."
         ],
         "remote_phase_processing": [
             .it: "Elaborazione dei brani…", .en: "Processing tracks…"
         ],
         "remote_phase_processing_took": [
-            .it: "XML letto in %d s. Elaborazione dei brani…", .en: "XML read in %d s. Processing tracks…"
+            .it: "File letto in %d s. Elaborazione dei brani…", .en: "File read in %d s. Processing tracks…"
         ],
         "remote_err_missing_file": [
-            .it: "File XML non trovato: %@", .en: "XML file not found: %@"
+            .it: "File della libreria non trovato: %@", .en: "Library file not found: %@"
         ],
         "external_pick_xml_title": [
-            .it: "Libreria di Musica (file XML)", .en: "Music library (XML file)"
+            .it: "Libreria di Musica (XML o JSON del server)", .en: "Music library (XML or server JSON)"
         ],
         "external_pick_xml_message": [
-            .it: "Scegli il file XML della libreria esportato dall'altro Mac (cartella condivisa montata).",
-            .en: "Choose the library XML file exported from the other Mac (mounted shared folder)."
+            .it: "Scegli la libreria remota (XML / JSON)", .en: "Choose the remote library (XML / JSON)"
         ],
         "external_pick_media_title": [
             .it: "Cartella dei brani", .en: "Music files folder"
@@ -2078,14 +2410,18 @@ private enum L {
             .en: "Choose the mounted folder that contains the audio files (usually “Media”)."
         ],
         "external_status_reading": [
-            .it: "Lettura del file XML della libreria…", .en: "Reading the library XML file…"
+            .it: "Lettura del file della libreria…", .en: "Reading the library file…"
         ],
         "external_cancelled": [
             .it: "Apertura della libreria annullata: cartella dei brani non scelta.",
             .en: "Opening the library cancelled: no music folder chosen."
         ],
         "external_err_unreadable": [
-            .it: "File XML della libreria non leggibile.", .en: "The library XML file could not be read."
+            .it: "File della libreria non leggibile (né XML di Musica né JSON del server).", .en: "The library file could not be read (neither a Music XML nor a server JSON)."
+        ],
+        "external_err_server_schema": [
+            .it: "Il file del server usa il formato %d, più recente di quelli che questa versione conosce. Aggiorna Music Manager.",
+            .en: "The server file uses format %d, newer than this version understands. Update Music Manager."
         ],
         "status_loading_library": [
             .it: "Lettura libreria Musica…", .en: "Reading Music library…"
@@ -2453,6 +2789,9 @@ private enum L {
         ],
         "storage_legend_music": [
             .it: "Music", .en: "Music"
+        ],
+        "storage_legend_podcasts": [
+            .it: "Podcast", .en: "Podcasts"
         ],
 
         // Conferma di chiusura con dispositivo connesso

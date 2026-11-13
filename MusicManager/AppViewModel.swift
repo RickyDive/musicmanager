@@ -373,8 +373,11 @@ final class AppViewModel: ObservableObject {
             softwareUpdateChecked = true
         }
         Task { [weak self] in
-            let result = await GarminUpdateService.check(deviceXML: xml, installedVersion: installed)
+            AppLog.debug("Controllo aggiornamento software: origine = collegamento/«Aggiorna», dispositivo …\(deviceID.suffix(4)), XML appena letto, installata \(installed ?? "?")")
+            let result = await GarminUpdateService.check(deviceXML: xml, installedVersion: installed,
+                                                         onReleases: { AppSettings.shared.noteReleaseChannels($0, forDevice: deviceID) })
             guard let self, let result else { return }
+            self.recordUpdateNotes(result, deviceID: deviceID)
             self.softwareUpdateResults[deviceID] = result
             self.softwareUpdateResultVersion[deviceID] = installed ?? ""
             if self.deviceXMLInfo?.id == deviceID { self.softwareUpdateStatus = result }
@@ -382,6 +385,13 @@ final class AppViewModel: ObservableObject {
             AppSettings.shared.setSoftwareUpToDate(result == .upToDate, forDevice: deviceID)
             self.addUpdateNotice(deviceID: deviceID, status: result, installed: installed, readDate: Date())
         }
+    }
+
+    /// Ricorda su file le novità (changelog) di Garmin di un aggiornamento disponibile, per rivederle anche dopo l'aggiornamento.
+    private func recordUpdateNotes(_ status: SoftwareUpdateStatus, deviceID: String) {
+        guard case let .available(version, notes) = status, let notes, !notes.isEmpty else { return }
+        DeviceXMLStore.saveUpdateNotes(notes, version: version, channel: version.lowercased().hasSuffix(" beta") ? "beta" : "stable",
+                                       forDevice: deviceID)
     }
 
     // MARK: Controllo aggiornamenti all'apertura (dai file GarminDevice.xml memorizzati)
@@ -472,7 +482,11 @@ final class AppViewModel: ObservableObject {
                 guard let stored = DeviceXMLStore.load(forDevice: known.id) else { continue }
                 let raw = DeviceImageService.modelInfo(fromXML: stored.xml).softwareVersion
                 let installed = Self.formattedSoftwareVersion(raw) ?? (known.softwareVersion.isEmpty ? nil : known.softwareVersion)
-                guard let result = await GarminUpdateService.check(deviceXML: stored.xml, installedVersion: installed) else { continue }
+                AppLog.debug("Controllo aggiornamento software: origine = apertura dell'app, dispositivo …\(known.id.suffix(4)), XML memorizzato del \(stored.date.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "?"), installata \(installed ?? "?")")
+                let knownID = known.id
+                guard let result = await GarminUpdateService.check(deviceXML: stored.xml, installedVersion: installed,
+                                                                   onReleases: { AppSettings.shared.noteReleaseChannels($0, forDevice: knownID) }) else { continue }
+                self.recordUpdateNotes(result, deviceID: known.id)
                 self.softwareUpdateResults[known.id] = result
                 self.softwareUpdateResultVersion[known.id] = installed ?? ""
                 AppSettings.shared.setSoftwareUpToDate(result == .upToDate, forDevice: known.id)
@@ -503,18 +517,22 @@ final class AppViewModel: ObservableObject {
     /// Formati e funzioni multimediali dichiarati da `GarminDevice.xml` (nil = sconosciuti: non si blocca nulla).
     @Published private(set) var deviceMedia: DeviceImageService.MediaCapabilities?
     /// Dispositivo collegato che non supporta la musica: le info restano visibili, ma ogni scrittura è disattivata.
-    var isDeviceReadOnly: Bool { device != nil && deviceMedia?.isMusicCapable == false }
+    var isDeviceReadOnly: Bool { device != nil && (deviceMedia?.isMusicCapable == false || deviceLockedByUser != nil) }
+    /// Profili utente: nome dell'utente a cui appartiene il dispositivo collegato, se si è scelto «Resta con…» (sola lettura).
+    @Published private(set) var deviceLockedByUser: String?
 
     /// Da chiamare all'inizio di ogni operazione che scrive sul dispositivo: se è in sola lettura
     /// avvisa nella barra di stato e restituisce false.
     private func ensureDeviceWritable() -> Bool {
         guard isDeviceReadOnly else { return true }
+        if let owner = deviceLockedByUser { status = "⚠️ " + t("status_device_other_user", owner); return false }
         status = "⚠️ " + t("status_device_not_music_capable")
         return false
     }
 
     /// Azzera capacità e formati del dispositivo (scollegamento o nuova connessione).
     private func resetDeviceMedia() {
+        deviceLockedByUser = nil
         deviceMedia = nil
         LocalTrack.deviceExtensions = nil
     }
@@ -527,6 +545,8 @@ final class AppViewModel: ObservableObject {
     private var softwareUpdateResultVersion: [String: String] = [:]
     /// Numero di serie di produzione del dispositivo collegato (servizio Garmin `unit-info`); nil se non noto.
     @Published var deviceSerial: String?
+    /// Codice commerciale della variante («010-04337-01»), da `unit-info` di Garmin (2.4 Internal).
+    @Published var deviceProductNumber: String?
     /// Vero quando Garmin ha restituito le informazioni sulle mappe del dispositivo collegato (chiamata
     /// `maps/universal/update`): nel pannello Device compare l'icona del mondo. Per ora la chiamata non c'è ancora.
     @Published var deviceMapsAvailable = false
@@ -553,6 +573,8 @@ final class AppViewModel: ObservableObject {
 
     // Dispositivo - barra dello spazio (solo memoria interna)
     @Published var garminFolderSize: UInt64 = 0
+    /// Dimensione della cartella «Podcasts» sul dispositivo (segmento della barra della memoria).
+    @Published var podcastsFolderSize: UInt64 = 0
     @Published var mapsSize: UInt64 = 0
     /// Spazio dei servizi di streaming (somma di MediaCacheSize in GarminDevice.xml), 0 se non ce ne sono.
     @Published var servicesSize: UInt64 = 0
@@ -948,6 +970,10 @@ final class AppViewModel: ObservableObject {
     @Published var externalLibraryName: String?
     /// Libreria remota attiva (id della voce in Impostazioni ▸ Remote Libraries).
     @Published var externalLibraryID: UUID?
+    /// Libreria remota aperta dalla copia salvata il cui file sul server è cambiato nel frattempo (2.4): finché non si
+    /// rilegge, il pulsante Aggiorna della barra del titolo è evidenziato con il colore dell'interfaccia.
+    @Published private(set) var remoteUpdateLibraryID: UUID?
+    var remoteUpdateAvailable: Bool { remoteUpdateLibraryID != nil && remoteUpdateLibraryID == externalLibraryID }
     /// true quando la libreria letta da Musica non contiene nessun brano: l'app mostra un avviso.
     @Published var showEmptyLibraryAlert = false
     /// Invio dalla scheda Playlist con una scelta parziale o mista (non una o più playlist intere): avviso e proposta di
@@ -1078,6 +1104,10 @@ final class AppViewModel: ObservableObject {
         didSet { if isShuffleOn != oldValue { rebuildPlayOrder(keeping: playerTrack) } }
     }
     @Published var isRepeatOn = false
+    /// Anteprima (2.4): vale per qualunque coda (Custom, playlist, artisti, album, brani) e resta attiva finché non si spegne; non si ricorda tra un avvio e l'altro.
+    @Published var isPreviewOn = false {
+        didSet { if !isPreviewOn { player.cancelPreview() } }
+    }
 
     /// Le due viste partono sempre dalla scheda scelta nelle Impostazioni (Playlist di default).
     /// Rileva lo scollegamento USB del dispositivo (vedi `USBRemovalWatcher`).
@@ -1126,7 +1156,9 @@ final class AppViewModel: ObservableObject {
             let id = await Task.detached(priority: .utility, operation: { NetworkIdentity.currentRouterID() }).value
             guard let self else { return }
             if self.networkID != id { self.networkID = id }
-            self.networkChecked = true
+            // Con lo stesso valore non si assegna: ogni assegnazione a una proprietà pubblicata ridisegna tutta la lista Album/Artisti
+            // (con migliaia di gruppi costava fino a 2 s, a ogni cambio di stato della rete).
+            if !self.networkChecked { self.networkChecked = true }
         }
     }
 
@@ -1514,11 +1546,14 @@ final class AppViewModel: ObservableObject {
     /// Indice dei file presenti sul dispositivo: nome file (minuscolo) → artisti. Ricostruito a ogni
     /// cambio di `deviceTracks`, così il controllo per riga (`isOnDevice`) è immediato.
     private var deviceFileIndex: [String: Set<String>] = [:]
+    /// Cresce a ogni ricostruzione dell'indice: le liste (CatalogBrowser) ricalcolano «già sul dispositivo» dei gruppi solo quando cambia.
+    private(set) var deviceIndexRevision = 0
 
     private func rebuildDeviceFileIndex() {
         var index: [String: Set<String>] = [:]
         for d in deviceTracks { index[d.filename.lowercased(), default: []].insert(d.artist.lowercased()) }
         deviceFileIndex = index
+        deviceIndexRevision += 1
     }
 
     /// Numeri del riepilogo del pannello dispositivo (artisti, album, durata totale).
@@ -1759,6 +1794,67 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Profili utente
+
+    /// Dispositivo appena collegato che risulta di un altro utente: si chiede se passare a lui (alert in `ContentView`).
+    struct DeviceOwnerPrompt: Identifiable {
+        let owner: UserProfile
+        let deviceID: String
+        let model: String
+        let softwareVersion: String
+        let memoryBytes: UInt64
+        let unitID: String
+        var id: String { deviceID }
+    }
+    @Published var deviceOwnerPrompt: DeviceOwnerPrompt?
+
+    /// Risposta all'alert: con «passa» si cambia utente (se l'operazione in corso lo permette), poi il dispositivo si registra
+    /// per l'utente che resta attivo.
+    func resolveDeviceOwnerPrompt(switchUser: Bool) {
+        guard let p = deviceOwnerPrompt else { return }
+        deviceOwnerPrompt = nil
+        AppLog.event("utenti", "dispositivo di un altro utente (\(UserProfiles.shared.number(of: p.owner.id))): scelta «\(switchUser ? "passa a quell'utente" : "resta, sola lettura")»")
+        // «Resta con…»: il dispositivo è di un altro utente, quindi non si registra e resta in sola lettura (nessun invio né
+        // cancellazione) finché non si passa a quell'utente o lo si ricollega.
+        if !switchUser || !UserProfiles.shared.switchTo(p.owner.id) {
+            deviceLockedByUser = p.owner.name
+            let mtp = self.mtp
+            Task { await mtp.setWriteLocked(true) }
+            status = "⚠️ " + t("status_device_other_user", p.owner.name)
+            return
+        }
+        let isNew = AppSettings.shared.recordConnectedDevice(id: p.deviceID, model: p.model, softwareVersion: p.softwareVersion,
+                                                             memoryBytes: p.memoryBytes, unitID: p.unitID)
+        if let serial = deviceSerial, deviceXMLInfo?.id == p.deviceID { AppSettings.shared.setSerialNumber(serial, forDevice: p.deviceID) }
+        if isNew { nicknamePromptDeviceID = p.deviceID }
+    }
+
+    /// Cambio utente: le impostazioni sono già state rilette; qui si riallinea ciò che l'app tiene in memoria. Le librerie esterne
+    /// sono dell'utente (si torna alla libreria locale) e si riparte dall'elenco iniziale scelto dal nuovo utente.
+    func profileDidChange() {
+        remoteUpdateLibraryID = nil
+        // Dispositivo già collegato: se il nuovo utente non lo conosce ma lo conosce un altro, si blocca (sola lettura) e si
+        // chiede se passare a quell'utente; altrimenti si toglie un eventuale blocco precedente.
+        if device != nil, let id = deviceXMLInfo?.id, !id.isEmpty, let owner = UserProfiles.shared.ownerOfUnknownDevice(id) {
+            deviceLockedByUser = owner.name
+            let mtp = self.mtp
+            Task { await mtp.setWriteLocked(true) }
+            deviceOwnerPrompt = DeviceOwnerPrompt(owner: owner, deviceID: id, model: deviceXMLInfo?.displayName ?? deviceXMLInfo?.description ?? "",
+                                                  softwareVersion: "", memoryBytes: 0, unitID: "")
+            AppLog.event("utenti", "dopo il cambio utente il dispositivo collegato è di \(UserProfiles.shared.number(of: owner.id)): sola lettura e avviso")
+        } else if deviceLockedByUser != nil {
+            deviceLockedByUser = nil
+            let mtp = self.mtp
+            let lock = deviceMedia?.isMusicCapable == false
+            Task { await mtp.setWriteLocked(lock) }
+        }
+        if externalLibraryID != nil { Task { await showLocalLibrary() } }
+        let start = AppSettings.shared.defaultCategory
+        appleCategory = start
+        deviceCategory = start
+        objectWillChange.send()
+    }
+
     // MARK: - Librerie remote (file XML)
 
     /// Torna alla libreria locale di Musica (lasciando la libreria remota attiva, se c'è).
@@ -1846,6 +1942,7 @@ final class AppViewModel: ObservableObject {
             let byID = Dictionary(catalog.tracks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             externalLibraryName = cfg.nickname
             externalLibraryID = cfg.id
+            remoteUpdateLibraryID = nil
             selectedTrackIDs = []
             cancelAlbumArtworkTasks()
             artworkOrigins = [:]
@@ -1869,6 +1966,7 @@ final class AppViewModel: ObservableObject {
             Task { [weak self] in
                 guard await RemoteLibraryManager.shared.sourceChangedSinceCache(cfg), let self, self.externalLibraryID == cfg.id else { return }
                 self.status = "⚠️ " + t("remote_library_changed_status", cfg.nickname)
+                self.remoteUpdateLibraryID = cfg.id
             }
         }
     }
@@ -1892,7 +1990,7 @@ final class AppViewModel: ObservableObject {
     /// Apre una libreria «Unità esterna» dal suo indice (senza rileggere i file). Con `rescan` (o se manca l'indice) fa
     /// prima una scansione incrementale della cartella.
     func selectDriveLibrary(_ cfg: DriveLibraryConfig, rescan: Bool = false) async {
-        guard DriveLibraryService.rootURL(cfg) != nil else {
+        guard await Task.detached(priority: .userInitiated, operation: { DriveLibraryService.rootURL(cfg) }).value != nil else {
             status = "⚠️ " + t("drive_err_unavailable", cfg.nickname)
             return
         }
@@ -1954,7 +2052,7 @@ final class AppViewModel: ObservableObject {
     /// se l'unità non è collegata). Serve al pulsante «Espelli».
     var driveLibraryVolumeURL: URL? {
         guard let id = externalLibraryID, let cfg = AppSettings.shared.driveLibraries.first(where: { $0.id == id }),
-              let root = DriveLibraryService.rootURL(cfg),
+              let root = DriveRootCache.shared.root(cfg),
               let volume = (try? root.resourceValues(forKeys: [.volumeURLKey]))?.volume,
               volume.path != "/", root.path.hasPrefix("/Volumes/") else { return nil }
         return volume
@@ -2024,8 +2122,8 @@ final class AppViewModel: ObservableObject {
     /// libreria locale con un avviso: i file non ci sono più e un invio fallirebbe.
     func checkDriveLibraryStillAvailable() async {
         guard !isBusy, isDriveLibraryActive, let id = externalLibraryID,
-              let cfg = AppSettings.shared.driveLibraries.first(where: { $0.id == id }),
-              DriveLibraryService.rootURL(cfg) == nil else { return }
+              let cfg = AppSettings.shared.driveLibraries.first(where: { $0.id == id }) else { return }
+        guard await Task.detached(priority: .userInitiated, operation: { DriveLibraryService.rootURL(cfg) }).value == nil else { return }
         await showLocalLibrary()
         status = "⚠️ " + t("drive_disconnected_status", cfg.nickname)
     }
@@ -2321,6 +2419,13 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    /// Origine con il controllo completo (come nell'invio): file, libreria di Musica, altri brani dello stesso album, Musica via
+    /// AppleScript, cache di GMM. Per il filtro «solo senza copertina»; sulle librerie di rete lente resta il risultato veloce.
+    func artworkOriginFull(for track: LocalTrack) async -> ArtworkOrigin {
+        if track.id.hasPrefix("ext:"), isRemoteNetworkLibraryActive { return ArtworkOrigin.none }
+        return await appleArtworkResolved(for: track, fromMusic: true).origin
+    }
+
     /// Origine della copertina di un brano, per l'icona negli elenchi.
     func artworkOrigin(for track: LocalTrack) async -> ArtworkOrigin {
         if let known = artworkOrigins[track.id] { return known }
@@ -2357,12 +2462,17 @@ final class AppViewModel: ObservableObject {
             guard let self else { return nil }
             for sibling in siblings.prefix(12) {
                 if Task.isCancelled { return nil }
-                if let data = await self.originalArtwork(for: sibling) { return data }
+                if let data = await self.originalArtwork(for: sibling) {
+                    AppLog.debug("[copertine] «\(track.title)» senza copertina propria: presa da un brano dello stesso album («\(sibling.title)», \(data.count) byte)")
+                    return data
+                }
             }
             if Task.isCancelled { return nil }
             // Un brano di libreria condivisa non esiste in Musica: niente richiesta ad AppleScript.
             if track.id.hasPrefix("ext:") { return nil }
-            return await AppleMusicScripting.artwork(forTrackID: track.id)
+            let fromMusic = await AppleMusicScripting.artwork(forTrackID: track.id)
+            AppLog.debug("[copertine] «\(track.title)» senza copertina propria, \(siblings.count) brani dello stesso album senza copertina utile: Musica (AppleScript) \(fromMusic.map { "ha restituito \($0.count) byte" } ?? "non ha copertina")")
+            return fromMusic
         }
         albumArtworkTasks[key] = task
         let result = await task.value
@@ -2461,6 +2571,7 @@ final class AppViewModel: ObservableObject {
     }
 
     private func startPlayback(_ track: LocalTrack) {
+        player.previewMode = isPreviewOn
         guard let url = track.url else {
             status = "⚠️ " + t("reason_file_unavailable")
             return
@@ -2765,11 +2876,6 @@ final class AppViewModel: ObservableObject {
             Self.normalizedForMatch(title) + "|" + Self.normalizedForMatch(artist)
         }
         let existingKeys = Set((existingPlaylist?.tracks ?? []).map { listKey($0.title, $0.artist) })
-        let infos = infos.filter { !existingKeys.contains(listKey($0.displayTitle, $0.artist)) }
-        guard !infos.isEmpty else {
-            status = t("status_drop_already_listed")
-            return
-        }
 
         // Un brano già in Music non si aggiunge mai: si usa quello della libreria. Se in Music non è trasferibile (solo
         // cloud, protetto...) ma si ha il file, si trasferisce il file trascinato con i dati (artista/album/titolo) del
@@ -2793,6 +2899,40 @@ final class AppViewModel: ObservableObject {
             } else {
                 toAdd.append(entries.count)
                 entries.append((info, nil))
+            }
+        }
+
+        // Brani già nella playlist «Direct Copy» del dispositivo: si riconoscono sia dai dati del file trascinato sia da quelli del brano
+        // di Music abbinato (sul dispositivo finiscono quelli della libreria, che possono differire dai tag del file). Si chiede se
+        // saltarli (predefinito) o aggiungerli di nuovo (la playlist li conterrebbe due volte).
+        if !existingKeys.isEmpty {
+            let duplicates = entries.indices.filter { i in
+                existingKeys.contains(listKey(entries[i].info.displayTitle, entries[i].info.artist))
+                    || (entries[i].track.map { existingKeys.contains(listKey($0.title, $0.artist)) } ?? false)
+            }
+            if !duplicates.isEmpty {
+                let titles = duplicates.map { entries[$0].info.displayTitle }
+                try? await Task.sleep(nanoseconds: 300_000_000)   // il pannello di importazione si sta chiudendo
+                let model = QuitDialogModel(
+                    title: t("alert_drop_duplicates_title"), message: t("alert_drop_duplicates_message", titles.count),
+                    buttons: [QuitDialogButton(title: t("button_skip_duplicates"), kind: .primary),
+                              QuitDialogButton(title: t("button_add_anyway")),
+                              QuitDialogButton(title: t("button_cancel"), isCancel: true)])
+                model.items = titles
+                switch DialogPresenter.run(model) {
+                case 0:
+                    let skip = Set(duplicates)
+                    entries = entries.enumerated().filter { !skip.contains($0.offset) }.map { $0.element }
+                    toAdd = entries.indices.filter { entries[$0].track == nil }
+                    guard !entries.isEmpty else {
+                        status = t("status_drop_already_listed")
+                        return
+                    }
+                case 1:
+                    break
+                default:
+                    return
+                }
             }
         }
 
@@ -2923,6 +3063,154 @@ final class AppViewModel: ObservableObject {
         if !problems.isEmpty {
             status = "⚠️ " + t("status_drop_not_added", problems.count, problems.joined(separator: "; "))
         }
+    }
+
+    // MARK: - Podcast di Apple (2.4 Internal, fase 2)
+
+    /// Nomi dei file già presenti in `Podcasts/` (e nelle sue sottocartelle, fino a tre livelli), per riconoscere gli episodi già inviati:
+    /// l'identità di un episodio è il nome del file di Apple (`<UUID>.mp3`), uguale anche riscaricandolo.
+    private func podcastNamesOnDevice(folderID: UInt32, depth: Int = 0) async -> Set<String> {
+        let items = (try? await mtp.list(storageID: selectedStorageID, parentID: folderID)) ?? []
+        var names = Set(items.filter { !$0.isFolder }.map { MTPService.nameKey($0.name) })
+        if depth < 3 {
+            for folder in items where folder.isFolder {
+                names.formUnion(await podcastNamesOnDevice(folderID: folder.id, depth: depth + 1))
+            }
+        }
+        return names
+    }
+
+    /// File presenti in `Podcasts/` sul dispositivo (anche nelle sottocartelle, fino a tre livelli); vuoto se non c'è la cartella.
+    private func listPodcastFiles(folderID: UInt32, path: String, depth: Int) async -> [DevicePodcastFile] {
+        let items = (try? await mtp.list(storageID: selectedStorageID, parentID: folderID)) ?? []
+        var out: [DevicePodcastFile] = []
+        for item in items {
+            if item.isFolder {
+                guard depth < 3 else { continue }
+                let sub = path.isEmpty ? item.name : path + "/" + item.name
+                out += await listPodcastFiles(folderID: item.id, path: sub, depth: depth + 1)
+            } else {
+                out.append(DevicePodcastFile(id: item.id, name: item.name, size: item.size, folder: path))
+            }
+        }
+        return out
+    }
+
+    func devicePodcastFiles() async -> [DevicePodcastFile] {
+        guard device != nil,
+              let folder = await mtp.findFolder(named: "Podcasts", parentID: mtpRootParent, storageID: selectedStorageID) else { return [] }
+        return await listPodcastFiles(folderID: folder, path: "", depth: 0)
+    }
+
+    /// Dopo un invio o una rimozione di podcast: rilegge lo spazio libero (volume o libmtp) e scrive nel registro il valore prima e dopo.
+    private func refreshDeviceFreeSpace() async {
+        let before = device?.storages.first(where: { $0.id == selectedStorageID })?.free
+        if let current = device, let fresh = await mtp.currentStorages() {
+            let after = fresh.first(where: { $0.id == selectedStorageID })?.free
+            if let before, let after { AppLog.event("podcast", "spazio libero: \(before / 1_000_000) MB → \(after / 1_000_000) MB") }
+            device = MTPDeviceInfo(friendlyName: current.friendlyName, manufacturer: current.manufacturer,
+                                   model: current.model, nickname: current.nickname, storages: fresh)
+        }
+    }
+
+    /// Rimuove dal dispositivo i file indicati (solo dal dispositivo: Apple Podcasts non si tocca).
+    func deletePodcastFiles(_ files: [DevicePodcastFile]) async {
+        guard !files.isEmpty, device != nil else { return }
+        await perform(t("podcast_tab") + "…") {
+            var ok = 0, failed = 0
+            for (i, file) in files.enumerated() {
+                status = t("podcast_status_removing", i + 1, files.count)
+                progress = Double(i) / Double(max(files.count, 1))
+                do {
+                    try await mtp.delete(itemID: file.id)
+                    ok += 1
+                } catch {
+                    failed += 1
+                    AppLog.event("podcast", "rimozione non riuscita (\(error.localizedDescription))")
+                }
+            }
+            AppLog.event("podcast", "rimozione conclusa: \(ok) rimossi, \(failed) falliti")
+            status = (failed > 0 ? "⚠️ " : "") + t("podcast_status_removed", ok) + (failed > 0 ? t("podcast_status_failed", failed) : "") + "."
+        }
+        await refreshDeviceFreeSpace()
+    }
+
+    /// Invia al dispositivo gli episodi indicati, in `Podcasts/`: il file mantiene il nome di Apple e prende i tag su una COPIA temporanea
+    /// (l'originale nella cache di Apple non si tocca). Gli episodi già presenti (stesso nome, anche in sottocartelle) non si ricopiano.
+    func sendPodcastEpisodes(_ episodes: [PodcastEpisode]) async {
+        let eligible = episodes.filter { $0.isMP3 && $0.isComplete }
+        let skippedFormat = episodes.count - eligible.count
+        guard !eligible.isEmpty else {
+            status = "⚠️ " + t("podcast_status_none_sendable")
+            return
+        }
+        guard device != nil else {
+            status = "⚠️ " + t("podcast_status_no_device")
+            return
+        }
+        transferStopRequested = false
+        await perform(t("status_preparing")) {
+            let started = Date()
+            let folder = try await mtp.ensureFolder(named: "Podcasts", parentID: mtpRootParent, storageID: selectedStorageID)
+            let present = await podcastNamesOnDevice(folderID: folder)
+            let toSend = eligible.filter { !present.contains(MTPService.nameKey($0.fileURL.lastPathComponent)) }
+            let already = eligible.count - toSend.count
+
+            // Spazio libero: si controlla sul totale da inviare (le dimensioni delle copie con tag sono quasi uguali agli originali).
+            let needed = toSend.reduce(UInt64(0)) { $0 + UInt64(max(0, $1.fileSize)) }
+            if let storage = device?.storages.first(where: { $0.id == selectedStorageID }), storage.free > 0, needed > storage.free {
+                AppLog.event("podcast", "invio annullato: servono \(needed / 1_000_000) MB, liberi \(storage.free / 1_000_000) MB")
+                status = "⚠️ " + t("podcast_status_no_space", needed / 1_000_000, storage.free / 1_000_000)
+                return
+            }
+            AppLog.event("podcast", "invio: \(eligible.count) episodi richiesti, \(already) già sul dispositivo, \(toSend.count) da inviare (\(needed / 1_000_000) MB)\(skippedFormat > 0 ? ", \(skippedFormat) saltati (non MP3 o incompleti)" : "")")
+
+            var ok = 0, failed = 0
+            var existingCache: [UInt32: Set<String>] = [:]
+            for (i, ep) in toSend.enumerated() {
+                if transferStopRequested { break }
+                status = t("podcast_status_sending", i + 1, toSend.count, ep.title)
+                progress = Double(i) / Double(max(toSend.count, 1))
+                let dir = FileManager.default.temporaryDirectory.appendingPathComponent("MusicManager-podcast-invio-\(UUID().uuidString)", isDirectory: true)
+                defer { try? FileManager.default.removeItem(at: dir) }
+                let tmp = dir.appendingPathComponent(ep.fileURL.lastPathComponent)
+                let tags = PodcastTags.make(for: ep)
+                let t0 = Date()
+                var coverNote = "?"
+                do {
+                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    let source = ep.fileURL
+                    let episode = ep
+                    coverNote = try await Task.detached(priority: .utility) {
+                        try ID3Writer.writeCopy(of: source, to: tmp, tags: tags, cover: { PodcastArtwork.jpegData(for: episode) })
+                    }.value.rawValue
+                } catch {
+                    AppLog.event("podcast", "\(ep.uuid.prefix(8)): preparazione non riuscita (\(error.localizedDescription))")
+                    failed += 1
+                    continue
+                }
+                let outcome = try await uploadIfNeededAndVerify(from: tmp, storageID: selectedStorageID, parentID: folder,
+                                                                forceOverwrite: false, existingCache: &existingCache)
+                let secs = Date().timeIntervalSince(t0)
+                switch outcome {
+                case .transferred, .transferredWithoutArtwork, .skipped:
+                    ok += 1
+                    PodcastSentStore.remember([PodcastMeta(episode: ep)])
+                    AppLog.event("podcast", "\(ep.uuid.prefix(8)): inviato (\(ep.fileSize / 1_000_000) MB in \(String(format: "%.1f", secs)) s, copertina: \(coverNote))")
+                case .failed:
+                    failed += 1
+                    AppLog.event("podcast", "\(ep.uuid.prefix(8)): invio non riuscito (\(lastUploadError ?? "?"))")
+                }
+            }
+            let stopped = transferStopRequested
+            AppLog.event("podcast", "invio concluso in \(String(format: "%.1f", Date().timeIntervalSince(started))) s: \(ok) inviati, \(already) già presenti, \(failed) falliti\(stopped ? ", interrotto" : "")")
+            var message = t("podcast_status_sent", ok)
+            if already > 0 { message += t("podcast_status_already", already) }
+            if failed > 0 { message += t("podcast_status_failed", failed) }
+            if stopped { message += t("podcast_status_stopped") }
+            status = (failed > 0 ? "⚠️ " : "") + message + "."
+        }
+        await refreshDeviceFreeSpace()
     }
 
     /// Invio vero e proprio dei brani (file già preparati in TEMP) al dispositivo.
@@ -3597,6 +3885,7 @@ final class AppViewModel: ObservableObject {
         resetDeviceMedia()
         softwareUpdateStatus = nil
         deviceSerial = nil
+        deviceProductNumber = nil
         deviceIsRegistered = false
         deviceXMLData = nil
         deviceMapsAvailable = false
@@ -3631,27 +3920,39 @@ final class AppViewModel: ObservableObject {
                 deviceXMLData = xml
                 if media?.isMusicCapable != false {
                     // Dispositivo memorizzato (dati aggiornati a ogni collegamento) o nuovo (si propone il nickname).
-                    let isNew = AppSettings.shared.recordConnectedDevice(
-                        id: id, model: model.description ?? "",
-                        softwareVersion: Self.formattedSoftwareVersion(model.softwareVersion) ?? "",
-                        memoryBytes: info.storages.first?.capacity ?? 0, unitID: model.partNumber ?? "")
-                    if isNew { nicknamePromptDeviceID = id }
+                    // Profili utente: un dispositivo che appartiene a un altro utente propone il cambio (alert in `ContentView`);
+                    // la registrazione avviene alla risposta.
+                    let sw = Self.formattedSoftwareVersion(model.softwareVersion) ?? ""
+                    if let owner = UserProfiles.shared.ownerOfUnknownDevice(id) {
+                        deviceOwnerPrompt = DeviceOwnerPrompt(owner: owner, deviceID: id, model: model.description ?? "",
+                                                              softwareVersion: sw, memoryBytes: info.storages.first?.capacity ?? 0,
+                                                              unitID: model.partNumber ?? "")
+                        AppLog.event("utenti", "al collegamento il dispositivo «\(model.description ?? "?")» risulta di \(UserProfiles.shared.number(of: owner.id)) (utente attivo: \(UserProfiles.shared.number(of: UserProfiles.shared.activeID))): avviso")
+                    } else {
+                        let isNew = AppSettings.shared.recordConnectedDevice(
+                            id: id, model: model.description ?? "",
+                            softwareVersion: sw,
+                            memoryBytes: info.storages.first?.capacity ?? 0, unitID: model.partNumber ?? "")
+                        if isNew { nicknamePromptDeviceID = id }
+                    }
                     // Copia locale di GarminDevice.xml (solo dispositivi registrati), per i controlli a dispositivo scollegato.
                     if let xml { DeviceXMLStore.save(xml, forDevice: id) }
                 }
                 // Numero di serie: subito quello già memorizzato; quello nuovo arriva dalla chiamata a Garmin più sotto.
                 deviceSerial = AppSettings.shared.serialNumber(forDevice: id)
+                deviceProductNumber = UnitInfoCache.entry(unitID: id, model: model.description)?.unitPartNumber
                 if let xml { startSoftwareUpdateCheck(deviceID: id, xml: xml, installed: Self.formattedSoftwareVersion(model.softwareVersion), persist: deviceIsRegistered) }
             }
         }
         // Informazioni dell'unità da Garmin (solo l'ID dell'unità): numero di serie e immagine ufficiale del prodotto.
         var unitInfo: GarminUnitInfo?
         if let id = model.id, !id.isEmpty {
-            unitInfo = await GarminUnitInfoService.fetch(unitID: id)
+            unitInfo = await GarminUnitInfoService.fetch(unitID: id, model: model.description)
             if device != nil, deviceXMLInfo?.id == id, let serial = unitInfo?.serialNumber {
                 deviceSerial = serial
                 AppSettings.shared.setSerialNumber(serial, forDevice: id)
             }
+            if device != nil, deviceXMLInfo?.id == id, let product = unitInfo?.unitPartNumber { deviceProductNumber = product }
         }
         // Mappe: Garmin si interroga solo alla prima connessione (nessun Maps.json) o a richiesta dell'utente; poi si
         // legge sempre il file. Il controllo richiede l'opzione «controlla aggiornamenti» (invia l'XML a Garmin).
@@ -3669,12 +3970,15 @@ final class AppViewModel: ObservableObject {
                mapsChangedProposed.insert(id).inserted {
                 mapsChangedProposal = true
                 proposedChange = true
+                let reasons = GarminMapsService.mapsChangeReasons(since: stored, xml: xml)
+                AppLog.event("aggiornamenti", "mappe cambiate sul dispositivo …\(id.suffix(4)): \(reasons.joined(separator: "; ")) → proposto il controllo")
             }
             // Controllo vecchio di oltre 3 mesi: si propone (una volta per avvio e per dispositivo) di verificare le novità.
             if AppSettings.shared.checkDeviceUpdates, deviceIsRegistered, device != nil, deviceXMLInfo?.id == id,
                let days = AppSettings.shared.daysSinceMapsCheck(forDevice: id), days > AppSettings.mapsRecheckDays,
                !proposedChange, mapsRecheckProposed.insert(id).inserted {
                 mapsRecheckProposalDays = days
+                AppLog.event("aggiornamenti", "ultimo controllo delle mappe di …\(id.suffix(4)) di \(days) giorni fa → proposto il ricontrollo")
             }
         }
         if device != nil {
@@ -3709,6 +4013,9 @@ final class AppViewModel: ObservableObject {
         let result = await GarminMapsService.fetch(deviceXML: xml)
         guard device != nil, deviceXMLInfo?.id == deviceID else { return }
         if let catalog = result.catalog {
+            AppLog.event("aggiornamenti", "mappe di …\(deviceID.suffix(4)): controllo Garmin concluso — \(catalog.installed.count) installate, \(catalog.available.count) offerte" +
+                         (catalog.installed.compactMap { $0.updateAvailable == true ? "«\($0.name)»" : nil }.isEmpty ? "" :
+                            "; da aggiornare: " + catalog.installed.compactMap { $0.updateAvailable == true ? "«\($0.name)»" : nil }.joined(separator: ", ")))
             if deviceIsRegistered {
                 AppSettings.shared.setMaps(catalog, forDevice: deviceID)
             } else {
@@ -3733,6 +4040,7 @@ final class AppViewModel: ObservableObject {
 
     /// «Controlla ora» dalla proposta di ricontrollo.
     func acceptMapsRecheck() {
+        AppLog.event("aggiornamenti", "mappe: «Controlla ora» scelto dalla proposta (\(mapsChangedProposal ? "mappe cambiate" : "controllo vecchio"))")
         mapsRecheckProposalDays = nil
         mapsChangedProposal = false
         Task { await refreshDeviceMaps() }
@@ -3863,7 +4171,7 @@ final class AppViewModel: ObservableObject {
             // Come per il dispositivo MTP: con l'ID dell'unità si chiede a Garmin l'immagine ufficiale del prodotto; senza, si
             // usava solo la ricerca per modello e l'immagine cambiava (quella sbagliata) dopo «Connect».
             var graphicURL: URL?
-            if let id = info.id, !id.isEmpty { graphicURL = await GarminUnitInfoService.fetch(unitID: id)?.graphicURL }
+            if let id = info.id, !id.isEmpty { graphicURL = await GarminUnitInfoService.fetch(unitID: id, model: info.description)?.graphicURL }
             let image = await DeviceImageService.image(forModel: info, graphicURL: graphicURL, overrideURL: chosen)
             guard let self, self.volumeImageKey == key else { return }
             self.volumeDeviceImage = image
@@ -3877,6 +4185,7 @@ final class AppViewModel: ObservableObject {
     @Published var volumeRoutesOnly = false
     /// Numero di serie del dispositivo a volume (da Garmin con il solo ID dell'unità, come per i dispositivi MTP).
     @Published var volumeSerial: String?
+    @Published var volumeProductNumber: String?
     @Published var volumeMaps: GarminMapsCatalog?
     @Published var volumeMapsCheckedAt: Date?
     @Published var volumeMapsError: String?
@@ -3889,6 +4198,7 @@ final class AppViewModel: ObservableObject {
         volumeMapsAvailable = false
         volumeRoutesOnly = false
         volumeSerial = nil
+        volumeProductNumber = nil
         volumeMaps = nil
         volumeMapsCheckedAt = nil
         volumeMapsError = nil
@@ -3904,12 +4214,17 @@ final class AppViewModel: ObservableObject {
     func loadVolumeDeviceDetails() {
         resetVolumeDetails()
         guard let volume = volumeDevices.first, let id = volume.info.id, !id.isEmpty else { return }
-        let persist = volume.isMusicCapable
+        // Profili utente: un volume che appartiene a un altro utente non si registra per l'utente attivo (restando in «sola
+        // lettura» o dopo un cambio utente, la rilettura delle impostazioni rilancia questa funzione).
+        let persist = volume.isMusicCapable && UserProfiles.shared.ownerOfUnknownDevice(id) == nil
         loadVolumeStoredMaps(deviceID: id)
         // Numero di serie: subito quello memorizzato; poi (come per i dispositivi MTP) lo si chiede a Garmin con il solo ID dell'unità.
         volumeSerial = persist ? AppSettings.shared.serialNumber(forDevice: id) : nil
+        volumeProductNumber = UnitInfoCache.entry(unitID: id, model: volume.info.description)?.unitPartNumber
         Task { [weak self] in
-            let serial = await GarminUnitInfoService.fetch(unitID: id)?.serialNumber
+            let unit = await GarminUnitInfoService.fetch(unitID: id, model: volume.info.description)
+            if let self, self.volumeDevices.first?.info.id == id, let product = unit?.unitPartNumber { self.volumeProductNumber = product }
+            let serial = unit?.serialNumber
             guard let self, let serial, self.volumeDevices.first?.info.id == id else { return }
             self.volumeSerial = serial
             if persist { AppSettings.shared.setSerialNumber(serial, forDevice: id) }   // salva solo se il dispositivo è memorizzato
@@ -3927,8 +4242,11 @@ final class AppViewModel: ObservableObject {
             volumeSoftwareStatus = known
         } else {
             Task { [weak self] in
-                let result = await GarminUpdateService.check(deviceXML: xml, installedVersion: installed)
+                AppLog.debug("Controllo aggiornamento software: origine = unità montata, dispositivo …\(id.suffix(4)), XML della memoria, installata \(installed ?? "?")")
+                let result = await GarminUpdateService.check(deviceXML: xml, installedVersion: installed,
+                                                             onReleases: { AppSettings.shared.noteReleaseChannels($0, forDevice: id) })
                 guard let self, let result else { return }
+                self.recordUpdateNotes(result, deviceID: id)
                 self.softwareUpdateResults[id] = result
                 self.softwareUpdateResultVersion[id] = installed ?? ""
                 if self.volumeDevices.first?.info.id == id { self.volumeSoftwareStatus = result }
@@ -4076,6 +4394,7 @@ final class AppViewModel: ObservableObject {
         resetDeviceMedia()
         softwareUpdateStatus = nil
         deviceSerial = nil
+        deviceProductNumber = nil
         deviceIsRegistered = false
         deviceXMLData = nil
         deviceMapsAvailable = false
@@ -4089,6 +4408,7 @@ final class AppViewModel: ObservableObject {
         garminFolderSize = 0
         mapsSize = 0
         servicesSize = 0
+        podcastsFolderSize = 0
         exportPlan = nil
         status = t("status_device_unplugged")
     }
@@ -4103,6 +4423,7 @@ final class AppViewModel: ObservableObject {
         resetDeviceMedia()
         softwareUpdateStatus = nil
         deviceSerial = nil
+        deviceProductNumber = nil
         deviceIsRegistered = false
         deviceXMLData = nil
         deviceMapsAvailable = false
@@ -4116,6 +4437,7 @@ final class AppViewModel: ObservableObject {
         garminFolderSize = 0
         mapsSize = 0
         servicesSize = 0
+        podcastsFolderSize = 0
         status = t("status_disconnected")
     }
 
@@ -4134,7 +4456,33 @@ final class AppViewModel: ObservableObject {
         refreshAllRunning = true
         defer { refreshAllRunning = false }
         await loadLibrary(reloadRemote: true)
-        if device != nil, !isDeviceReadOnly { await refresh() }
+        if device != nil, !isDeviceReadOnly {
+            await refresh()
+            await recheckDeviceUpdates()
+        }
+    }
+
+    /// 2.4 Internal: il pulsante «Aggiorna» ricontrolla anche i dati di aggiornamento del dispositivo (software e mappe), come il
+    /// controllo manuale di Garmin Express. Solo con l'opzione «controlla aggiornamenti» accesa e per un dispositivo registrato
+    /// (in sola lettura o senza musica non si fa nulla). Rilegge GarminDevice.xml (se non si legge, usa quello già in memoria),
+    /// ripete il controllo del software ignorando il risultato già ottenuto in questo avvio e riscrive Maps.json.
+    func recheckDeviceUpdates() async {
+        guard AppSettings.shared.checkDeviceUpdates, deviceIsRegistered, !isDeviceReadOnly,
+              let info = device, let id = deviceXMLInfo?.id else { return }
+        let mtp = self.mtp
+        let storageIDs = info.storages.map(\.id)
+        let fresh = await withTimeout(20) { await mtp.readGarminDeviceXML(storageIDs: storageIDs) } ?? nil
+        guard let xml = fresh ?? deviceXMLData ?? DeviceXMLStore.load(forDevice: id)?.xml else { return }
+        if fresh != nil {
+            deviceXMLData = xml
+            DeviceXMLStore.save(xml, forDevice: id)
+        }
+        let model = DeviceImageService.modelInfo(fromXML: xml)
+        softwareUpdateResults[id] = nil
+        softwareUpdateResultVersion[id] = nil
+        startSoftwareUpdateCheck(deviceID: id, xml: xml, installed: Self.formattedSoftwareVersion(model.softwareVersion), persist: true)
+        await fetchMaps(deviceID: id, xml: xml)
+        AppLog.event("aggiornamenti", "«Aggiorna»: ricontrollati software e mappe del dispositivo")
     }
 
     func refresh() async {
@@ -4148,7 +4496,7 @@ final class AppViewModel: ObservableObject {
     /// Operazione potenzialmente lenta: la si esegue solo alla connessione o al cambio memoria,
     /// non a ogni refresh, e solo se la memoria selezionata è quella interna.
     private func loadStorageBreakdown() async {
-        guard isSelectedStorageInternal else { garminFolderSize = 0; mapsSize = 0; servicesSize = 0; return }
+        guard isSelectedStorageInternal else { garminFolderSize = 0; mapsSize = 0; servicesSize = 0; podcastsFolderSize = 0; return }
         isLoadingStorageBreakdown = true
         let (g, m) = await mtp.garminAndMapsSize(storageID: selectedStorageID)
         // Servizi di streaming: dimensione dichiarata dall'orologio in GarminDevice.xml (sola lettura).
@@ -4158,6 +4506,7 @@ final class AppViewModel: ObservableObject {
         servicesSize = xml.map { DeviceImageService.streamingServicesBytes(fromXML: $0) } ?? 0
         garminFolderSize = g
         mapsSize = m
+        podcastsFolderSize = await devicePodcastFiles().reduce(UInt64(0)) { $0 + $1.size }
         isLoadingStorageBreakdown = false
     }
 
@@ -5599,7 +5948,7 @@ final class AppViewModel: ObservableObject {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.directoryURL = Self.customLibFolder
-        guard panel.runModal() == .OK, let file = panel.url else { return }
+        guard StallWatchdog.modal({ panel.runModal() }) == .OK, let file = panel.url else { return }
         let name = file.deletingPathExtension().lastPathComponent
         let known = Dictionary((localTracks + tracks).compactMap { track in track.url.map { ($0.path, track) } },
                                uniquingKeysWith: { a, _ in a })

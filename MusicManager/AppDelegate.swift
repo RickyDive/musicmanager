@@ -206,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.center()
         // L'ombra segue la forma disegnata (rettangolo arrotondato): va ricalcolata a layout fatto.
         DispatchQueue.main.async { panel.invalidateShadow() }
-        NSApp.runModal(for: panel)
+        StallWatchdog.modal({ NSApp.runModal(for: panel) })
         panel.orderOut(nil)
         return model.choice
     }
@@ -430,7 +430,7 @@ enum DialogPresenter {
         panel.center()
         // L'ombra segue la forma disegnata (rettangolo arrotondato): va ricalcolata a layout fatto.
         DispatchQueue.main.async { panel.invalidateShadow() }
-        NSApp.runModal(for: panel)
+        StallWatchdog.modal({ NSApp.runModal(for: panel) })
         panel.orderOut(nil)
         return model.choice
     }
@@ -504,7 +504,7 @@ enum GlassModalPresenter {
             panel.center()
         }
         DispatchQueue.main.async { panel.invalidateShadow() }
-        NSApp.runModal(for: panel)
+        StallWatchdog.modal({ NSApp.runModal(for: panel) })
         panel.orderOut(nil)
     }
 }

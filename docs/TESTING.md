@@ -167,3 +167,21 @@ Eject on the nuvi: confirmed (2026-10-19): the device is also ejected correctly 
 Eject with a song playing (patient version, 2026-10-19): confirmed. Playback stops, the drive is ejected after the retries, the status says "Drive of library … ejected: you can unplug it." and the app returns to the local library.
 Drive not connected (2026-10-19): confirmed. In Settings the row shows the red icon with the cross and "Library “…” is not available: connect the drive."; the rescan button is disabled and the trash button stays active.
 External Drive Library on a network folder (NAS, not macOS), 2026-10-19: works with a few files (read correctly). Not yet measured with about a thousand files (first scan, rescan at every open, covers while browsing).
+
+## 2.5 — what to test
+Install from the DMG on a Mac without Homebrew (ideally a clean one; use `xattr -cr` as in [INSTALL.md](INSTALL.md)), then:
+1. **Welcome window**: shown at first launch (glass panel with the app icon). With «Don't show at next launch» ticked it does not come back; unticked, it shows again at the next launch.
+2. **Device data with Wi-Fi off**: connect a watch for the first time with the network off. Serial Number and Product Number are not read and the product image is missing (expected); with Wi-Fi on and the watch reconnected they appear, and once stored they are shown again even offline.
+3. **Podcasts** (Apple Podcasts episodes already downloaded; Full Disk Access for Music Manager): the tab lists programmes and seasons; send one or more MP3 episodes, check the green check, the purple Podcasts segment of the storage bar, the cover on the watch, and **Remove from device** (with confirmation). Non-MP3 or incomplete episodes cannot be sent.
+4. **MusicManager Server**: add a `library.json` in Settings ▸ Advanced ▸ External Sources; the library opens, the files folder is found, the Refresh button is highlighted after the server rescans.
+5. **Fix Artwork, online search**: an album with several editions shows all of them (arrows fixed in the corners of the cover); «The Best of …» and «Best Of …» match; a self-titled album does not match a compilation of the same artist.
+6. **Songs without cover**: with the filter on, the list shows the progress while scanning, then only the songs without cover; when none is left, «Show all songs» appears. Reopening the filter within 10 minutes is fast.
+7. **Genre filter**: select «No Genre» in one library, then switch to another library: the filter resets and the list is not empty.
+8. **Direct Copy**: drop the same files twice on the device panel: the second time a panel asks «Skip duplicates» / «Add anyway» / «Cancel»; «Skip» leaves the playlist unchanged.
+9. **Custom Playlist, PacePro**: splits, start delay and «Km per song» show the start km of each song and the «km N» tag; Tab goes distance → pace → next split; the panel does not move while typing.
+10. **Go to Album / Go to Artist** from a row, an album header and the mini player, with a very large library and many groups open.
+11. **Preview mode** (timer button in the mini player): each song plays 15 s from about 30 %, then the next one; works from any list.
+12. **Interface**: Albums quick switch (Abc / date added) is remembered; External Sources table (up to 5 entries, «+» asks the kind); pill-shaped buttons in the device bar; Settings window aligned.
+13. **User profiles** (experimental, off by default): with the switch on, each user keeps their own settings, language, devices and external sources.
+14. **Slow or missing network** while copying from an external source: the transfer reports the error and does not hang.
+15. Quit the app, reopen it, and check Help ▸ Copy Diagnostic Information and the log (Settings ▸ «Detailed log») after each scenario that failed.
