@@ -1,0 +1,200 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Release
+
+# Pushing a v* tag (v2.4, v2.4-beta1, v2.4-rc1, ...), including one created by publishing a release on GitHub,
+# builds the DMG on a GitHub runner and creates a DRAFT release "Music Manager v<version> (CI build)" with it.
+# The maintainer checks the draft and publishes it, so released DMGs are built by machines from the tagged source.
+# The workflow never publishes a release, never marks one Latest and never changes a release it did not create;
+# a re-run replaces only its own draft. Tags containing alpha/beta/rc are flagged as pre-releases.
+#
+# Release notes, first match wins:
+#   1. docs/RELEASE-NOTES-<version>.md (e.g. docs/RELEASE-NOTES-2.4-beta1.md, docs/RELEASE-NOTES-2.4.md; case and dashes ignored)
+#   2. the CHANGELOG.md section whose heading matches the tag ("## 2.4 Beta 1 — build 40" for v2.4-beta1)
+# followed by checksum, bundled library versions, docs/INSTALL.md and the changeset since the previous tag.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build as a CI draft release, e.g. v2.4'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Check Version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - name: Resolve tag
+        id: tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9] ]]; then
+            echo "::error::Not a version tag: $TAG"
+            exit 1
+          fi
+          prerelease=false
+          if echo "$TAG" | grep -qiE '(alpha|beta|rc)'; then prerelease=true; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Tag $TAG, prerelease=$prerelease"
+
+      - name: Check out tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          persist-credentials: false
+
+      - name: Tag must match project.yml
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          version=$(sed -n 's/^ *CFBundleShortVersionString: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' project.yml)
+          tag_num="${TAG#v}"
+          tag_num="${tag_num%%[^0-9.]*}"
+          ver_num="${version%%[^0-9.]*}"
+          if [ "$tag_num" != "$ver_num" ]; then
+            echo "::error file=project.yml::Tag $TAG is version $tag_num but CFBundleShortVersionString is \"$version\". Update project.yml before tagging."
+            exit 1
+          fi
+          # A label in the plist version ("2.4 Beta 1") must also match the tag's (v2.4-beta1).
+          norm() { tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9'; }
+          if [ "$version" != "$ver_num" ] && [ "$(echo "${TAG#v}" | norm)" != "$(echo "$version" | norm)" ]; then
+            echo "::error file=project.yml::Tag $TAG does not match CFBundleShortVersionString \"$version\"."
+            exit 1
+          fi
+          echo "project.yml version \"$version\" matches $TAG"
+
+  build:
+    needs: prepare
+    uses: ./.github/workflows/build.yml
+    with:
+      channel: release
+      ref: refs/tags/${{ needs.prepare.outputs.tag }}
+
+  publish:
+    name: Create Draft Release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+      VERSION: ${{ needs.build.outputs.version }}
+      DMG: ${{ needs.build.outputs.dmg }}
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download DMG
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: musicmanager-release
+          path: _dist
+
+      - name: Generate Release Notes
+        run: |
+          slug="${TAG#v}"
+          norm() { tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9'; }
+
+          notes=""
+          for f in docs/RELEASE-NOTES-*.md; do
+            name=$(basename "$f" .md)
+            if [ "$(echo "${name#RELEASE-NOTES-}" | norm)" = "$(echo "$slug" | norm)" ]; then
+              echo "Using curated notes from $f"
+              notes=$(cat "$f")
+              break
+            fi
+          done
+          if [ -z "$notes" ]; then
+            notes=$(awk -v want="$(echo "$slug" | norm)" '
+              /^## / {
+                if (found) exit
+                h = substr($0, 4); sub(/ —.*/, "", h); h = tolower(h); gsub(/[^a-z0-9]/, "", h)
+                if (h == want) { found = 1; next }
+              }
+              found { print }
+            ' CHANGELOG.md)
+            [ -n "$notes" ] && echo "Using the CHANGELOG.md section for $TAG"
+          fi
+          if [ -z "$notes" ]; then
+            echo "::warning::No docs/RELEASE-NOTES-${slug}.md and no CHANGELOG.md section for $TAG; the notes contain only the changeset."
+          fi
+
+          # Final releases list changes since the previous final release; pre-releases since the previous tag.
+          if [ "$PRERELEASE" = true ]; then
+            prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${TAG}^" 2>/dev/null || echo "-")
+          else
+            prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*[Aa]lpha*' --exclude '*[Bb]eta*' --exclude '*[Rr][Cc]*' "${TAG}^" 2>/dev/null || echo "-")
+          fi
+
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            echo "> Built by GitHub Actions from tag \`${TAG}\` (commit \`$(git rev-parse --short "${TAG}^{commit}")\`) in [this run](${run_url})."
+            echo
+            if [ -n "$notes" ]; then
+              printf '%s\n\n---\n\n' "$notes"
+            fi
+            echo "### Download"
+            echo
+            echo "- \`${DMG}\`: Apple Silicon, macOS 26 or later"
+            echo "- SHA-256: \`$(cut -d' ' -f1 "_dist/${DMG}.sha256")\`"
+            echo "- Bundled libraries (LGPL 2.1+): $(paste -sd ',' _dist/bundled-libs.txt | sed 's/,/, /g')"
+            echo
+            if [ -f docs/INSTALL.md ]; then
+              cat docs/INSTALL.md
+              echo
+            fi
+            echo "<details><summary>Changeset</summary>"
+            echo
+            # From the workflow's commit: a re-run can target an older tag that predates this script.
+            git show "${GITHUB_SHA}:.github/scripts/changeset.sh" | bash -s -- "$prev" "$TAG"
+            echo
+            echo "</details>"
+          } > release_notes.md
+          rm _dist/bundled-libs.txt
+          # GitHub caps release bodies at 125,000 characters.
+          head -c 120000 release_notes.md > release_notes.trimmed && mv release_notes.trimmed release_notes.md
+          cat release_notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          TITLE="Music Manager v${VERSION} (CI build)"
+          # project.yml may hold just "2.4" during a beta; the tag then carries the label.
+          if [ "$PRERELEASE" = true ] && [[ "$VERSION" =~ ^[0-9.]+$ ]]; then TITLE="Music Manager ${TAG} (CI build)"; fi
+          export TITLE
+
+          # Replace this workflow's earlier draft for the tag, if any. Releases made by hand, drafts included, are never touched.
+          for id in $(gh api --paginate "repos/${REPO}/releases?per_page=100" \
+                        --jq '.[] | select(.draft and .tag_name == env.TAG and .name == env.TITLE) | .id'); do
+            echo "Deleting the previous CI draft (release id $id)"
+            gh api -X DELETE "repos/${REPO}/releases/${id}"
+          done
+
+          flags=(--draft --latest=false)
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          url=$(gh release create "$TAG" --verify-tag --title "$TITLE" --notes-file release_notes.md "${flags[@]}" _dist/*)
+          echo "Draft release: $url"
+          printf '\n---\n\nDraft release (visible to maintainers only): %s\n' "$url" >> "$GITHUB_STEP_SUMMARY"
