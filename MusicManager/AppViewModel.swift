@@ -346,6 +346,8 @@ final class AppViewModel: ObservableObject {
     @Published var device: MTPDeviceInfo?
     /// Global ID di un dispositivo appena riconosciuto per la prima volta: finché non è nil si propone il nickname.
     @Published var nicknamePromptDeviceID: String?
+    /// true = si mostra il pannello «Dispositivo non più attivo» dopo il pulsante Disconnetti (il cavo resta inserito).
+    @Published var disconnectedNotice = false
 
     /// Nome mostrato accanto all'icona dell'orologio: il nickname scelto, altrimenti il nome del dispositivo.
     var deviceTitle: String {
@@ -394,6 +396,40 @@ final class AppViewModel: ObservableObject {
                                        forDevice: deviceID)
     }
 
+    /// 2.5.1: il dispositivo è stato aggiornato fuori da Music Manager (Garmin Express, telefono, Wi-Fi dell'orologio). Il server Garmin dà
+    /// le novità solo come offerta per versioni più alte di quella dichiarata: con l'XML nuovo la risposta è vuota e il testo andrebbe perso.
+    /// Prima di sovrascrivere la copia locale di GarminDevice.xml, se la versione del dispositivo è più alta di quella memorizzata e non ci
+    /// sono ancora novità per la versione installata, si interroga Garmin con la copia memorizzata (lo stato reale di prima, la stessa
+    /// richiesta del controllo all'apertura dell'app) e si ricordano le novità ricevute in UpdateNotes.json.
+    private func recoverNotesAfterOutsideUpdate(deviceID: String, newXML: Data) {
+        guard let stored = DeviceXMLStore.load(forDevice: deviceID) else { return }
+        let oldVersion = Self.formattedSoftwareVersion(DeviceImageService.modelInfo(fromXML: stored.xml).softwareVersion)
+        let newVersion = Self.formattedSoftwareVersion(DeviceImageService.modelInfo(fromXML: newXML).softwareVersion)
+        guard let old = oldVersion, let new = newVersion, !old.isEmpty, !new.isEmpty,
+              new.compare(old, options: .numeric) == .orderedDescending else { return }
+        // Avviso locale (nessuna richiesta a Garmin, quindi indipendente da «Controlla aggiornamenti»): una volta per dispositivo e versione.
+        if installedUpdateNotified.insert("\(deviceID)|\(new)").inserted {
+            installedUpdateNotice = InstalledUpdateNotice(name: AppSettings.shared.nickname(forDevice: deviceID), from: old, to: new)
+            AppLog.event("aggiornamenti", "dispositivo …\(deviceID.suffix(4)): software aggiornato fuori dall'app, \(old) → \(new) → avviso")
+        }
+        guard AppSettings.shared.checkDeviceUpdates else { return }
+        if let known = DeviceXMLStore.updateNotes(version: new, forDevice: deviceID), !known.isEmpty { return }   // una voce vuota non conta come «novità già note»
+        let oldXML = stored.xml
+        Task { [weak self] in
+            AppLog.debug("Controllo aggiornamento software: origine = cambio di versione fuori dall'app, dispositivo …\(deviceID.suffix(4)), XML memorizzato \(old) → dispositivo \(new): si chiedono a Garmin le novità con l'XML memorizzato")
+            let result = await GarminUpdateService.check(deviceXML: oldXML, installedVersion: old,
+                                                         onReleases: { AppSettings.shared.noteReleaseChannels($0, forDevice: deviceID) })
+            guard let self else { return }
+            guard let result, case let .available(version, noteText) = result, let text = noteText, !text.isEmpty else {
+                AppLog.debug("Controllo aggiornamento software: cambio di versione \(old) → \(new): Garmin non ha restituito novità (nessuna offerta o risposta non utilizzabile)")
+                return
+            }
+            self.recordUpdateNotes(result, deviceID: deviceID)
+            AppLog.debug("Controllo aggiornamento software: cambio di versione \(old) → \(new): novità ricevute per \(version) (\(text.count) caratteri) e memorizzate")
+            self.objectWillChange.send()   // la capsula «Software Updated» rilegge le novità
+        }
+    }
+
     // MARK: Controllo aggiornamenti all'apertura (dai file GarminDevice.xml memorizzati)
 
     /// Aggiornamento disponibile da proporre all'utente nella finestra di dialogo.
@@ -431,6 +467,8 @@ final class AppViewModel: ObservableObject {
     private func addUpdateNotice(deviceID: String, status: SoftwareUpdateStatus, installed: String?, readDate: Date?) {
         guard case let .available(version, notes) = status else { return }
         guard ignoredUpdateVersion(deviceID) != version, notifiedUpdates.insert("\(deviceID)|\(version)").inserted else { return }
+        // Prima connessione: la finestra del nuovo dispositivo mostra già la novità, niente seconda finestra (si riproporrà all'avvio).
+        guard nicknamePromptDeviceID != deviceID else { return }
         let known = AppSettings.shared.knownDevices.first { $0.id == deviceID }
         let nick = known?.nickname.trimmingCharacters(in: .whitespaces) ?? ""
         let name = nick.isEmpty ? ((known?.model.isEmpty == false ? known?.model : nil) ?? deviceID) : nick
@@ -459,6 +497,8 @@ final class AppViewModel: ObservableObject {
         let installed: String?
         let status: SoftwareUpdateStatus?
         let readDate: Date?
+        /// Almeno una mappa installata ha un aggiornamento (dall'ultimo controllo salvato in Maps.json).
+        var mapsToUpdate = false
     }
     /// Tutti i dispositivi registrati con l'esito dell'ultimo controllo: la tabella della finestra «Aggiornamento disponibile».
     var updateRows: [DeviceUpdateRow] {
@@ -466,33 +506,80 @@ final class AppViewModel: ObservableObject {
             let nick = d.nickname.trimmingCharacters(in: .whitespaces)
             return DeviceUpdateRow(id: d.id, name: nick.isEmpty ? (d.model.isEmpty ? d.id : d.model) : nick,
                                    installed: d.softwareVersion.isEmpty ? nil : d.softwareVersion,
-                                   status: softwareUpdateResults[d.id], readDate: DeviceXMLStore.load(forDevice: d.id)?.date)
+                                   status: softwareUpdateResults[d.id], readDate: DeviceXMLStore.load(forDevice: d.id)?.date,
+                                   mapsToUpdate: DeviceXMLStore.loadMaps(forDevice: d.id)?.installed.contains { $0.updateAvailable == true } ?? false)
         }
     }
 
     /// Una volta all'apertura, se l'opzione è accesa, controlla ogni dispositivo registrato usando la copia locale di
     /// GarminDevice.xml (anche a dispositivo scollegato) e propone la finestra se c'è un aggiornamento. Gira in background.
 
+    private static let lastNotesCheckKey = "last_update_notes_check"
+
     private func startLaunchUpdateCheck() {
         guard AppSettings.shared.checkDeviceUpdates else { return }
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 4_000_000_000)   // l'avvio dell'app ha la precedenza
             guard let self else { return }
-            for known in AppSettings.shared.knownDevices {
-                guard let stored = DeviceXMLStore.load(forDevice: known.id) else { continue }
-                let raw = DeviceImageService.modelInfo(fromXML: stored.xml).softwareVersion
-                let installed = Self.formattedSoftwareVersion(raw) ?? (known.softwareVersion.isEmpty ? nil : known.softwareVersion)
-                AppLog.debug("Controllo aggiornamento software: origine = apertura dell'app, dispositivo …\(known.id.suffix(4)), XML memorizzato del \(stored.date.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "?"), installata \(installed ?? "?")")
-                let knownID = known.id
-                guard let result = await GarminUpdateService.check(deviceXML: stored.xml, installedVersion: installed,
-                                                                   onReleases: { AppSettings.shared.noteReleaseChannels($0, forDevice: knownID) }) else { continue }
-                self.recordUpdateNotes(result, deviceID: known.id)
-                self.softwareUpdateResults[known.id] = result
-                self.softwareUpdateResultVersion[known.id] = installed ?? ""
-                AppSettings.shared.setSoftwareUpToDate(result == .upToDate, forDevice: known.id)
-                if self.deviceXMLInfo?.id == known.id { self.softwareUpdateStatus = result }
-                self.addUpdateNotice(deviceID: known.id, status: result, installed: installed, readDate: stored.date)
+            await self.runStoredUpdateCheck(origin: "apertura dell'app")
+            await self.runStoredMapsCheck(origin: "apertura dell'app")
+            UserDefaults.standard.set(Date(), forKey: Self.lastNotesCheckKey)
+            // 2.5.1: Garmin spesso propone un aggiornamento senza novità e le aggiunge nei giorni dopo. Con l'app aperta a lungo si
+            // ripete il controllo una volta al giorno (si guarda l'orologio ogni ora); le novità nuove o più complete si ricordano.
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_600_000_000_000)
+                guard AppSettings.shared.checkDeviceUpdates else { continue }
+                let last = UserDefaults.standard.object(forKey: Self.lastNotesCheckKey) as? Date ?? .distantPast
+                guard Date().timeIntervalSince(last) >= 24 * 3600 else { continue }
+                await self.runStoredUpdateCheck(origin: "controllo giornaliero")
+                await self.runStoredMapsCheck(origin: "controllo giornaliero")
+                UserDefaults.standard.set(Date(), forKey: Self.lastNotesCheckKey)
             }
+        }
+    }
+
+    /// Controlla ogni dispositivo registrato con la copia locale di GarminDevice.xml (anche a dispositivo scollegato) e ricorda le novità.
+    private func runStoredUpdateCheck(origin: String) async {
+        for known in AppSettings.shared.knownDevices {
+            guard let stored = DeviceXMLStore.load(forDevice: known.id) else { continue }
+            let raw = DeviceImageService.modelInfo(fromXML: stored.xml).softwareVersion
+            let installed = Self.formattedSoftwareVersion(raw) ?? (known.softwareVersion.isEmpty ? nil : known.softwareVersion)
+            AppLog.debug("Controllo aggiornamento software: origine = \(origin), dispositivo …\(known.id.suffix(4)), XML memorizzato del \(stored.date.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "?"), installata \(installed ?? "?")")
+            let knownID = known.id
+            guard let result = await GarminUpdateService.check(deviceXML: stored.xml, installedVersion: installed,
+                                                               onReleases: { AppSettings.shared.noteReleaseChannels($0, forDevice: knownID) }) else { continue }
+            recordUpdateNotes(result, deviceID: known.id)
+            softwareUpdateResults[known.id] = result
+            softwareUpdateResultVersion[known.id] = installed ?? ""
+            AppSettings.shared.setSoftwareUpToDate(result == .upToDate, forDevice: known.id)
+            if deviceXMLInfo?.id == known.id { softwareUpdateStatus = result }
+            addUpdateNotice(deviceID: known.id, status: result, installed: installed, readDate: stored.date)
+        }
+    }
+
+    /// 2.5.1: anche le mappe si ricontrollano all'apertura e poi una volta al giorno, con la copia locale di GarminDevice.xml (anche a
+    /// dispositivo scollegato): Maps.json resta aggiornato e il globo diventa rosso da solo se c'è una mappa da aggiornare. Non si
+    /// ripete se l'ultimo controllo ha meno di 20 ore (apertura ripetuta dell'app); un controllo fallito non cancella i dati già salvati.
+    private func runStoredMapsCheck(origin: String) async {
+        for known in AppSettings.shared.knownDevices where known.hasMaps != false {
+            guard let stored = DeviceXMLStore.load(forDevice: known.id) else { continue }
+            if let last = DeviceXMLStore.loadMaps(forDevice: known.id)?.checkedAt, Date().timeIntervalSince(last) < 20 * 3600 {
+                AppLog.debug("Controllo mappe: origine = \(origin), dispositivo …\(known.id.suffix(4)): ultimo controllo di meno di 20 ore fa, non si ripete")
+                continue
+            }
+            let result = await GarminMapsService.fetch(deviceXML: stored.xml)
+            guard let catalog = result.catalog else {
+                AppLog.debug("Controllo mappe: origine = \(origin), dispositivo …\(known.id.suffix(4)): nessuna risposta utilizzabile (\(result.error ?? "?")); dati precedenti invariati")
+                continue
+            }
+            AppSettings.shared.setMaps(catalog, forDevice: known.id)
+            if deviceXMLInfo?.id == known.id, device != nil {
+                loadStoredMaps(deviceID: known.id)
+                deviceMapsAvailable = !catalog.isEmpty
+            }
+            let toUpdate = catalog.installed.compactMap { $0.updateAvailable == true ? "«\($0.name)»" : nil }
+            AppLog.event("aggiornamenti", "mappe di …\(known.id.suffix(4)) (\(origin)): \(catalog.installed.count) installate, \(catalog.available.count) offerte" +
+                         (toUpdate.isEmpty ? "" : "; da aggiornare: " + toUpdate.joined(separator: ", ")))
         }
     }
 
@@ -566,6 +653,10 @@ final class AppViewModel: ObservableObject {
     private var mapsRecheckProposed: Set<String> = []
     /// Le mappe sul dispositivo non corrispondono più a Maps.json (es. aggiunte con Garmin Express): attiva la proposta di controllo.
     @Published var mapsChangedProposal = false
+    /// 2.5.1: il dispositivo risulta aggiornato fuori da Music Manager (versione del software più alta di quella memorizzata).
+    struct InstalledUpdateNotice: Equatable { let name: String; let from: String; let to: String }
+    @Published var installedUpdateNotice: InstalledUpdateNotice?
+    private var installedUpdateNotified: Set<String> = []
     private var mapsChangedProposed: Set<String> = []
     /// Data del controllo da cui provengono `deviceMaps` (mostrata come «Checked Today»).
     @Published var deviceMapsCheckedAt: Date?
@@ -3936,7 +4027,7 @@ final class AppViewModel: ObservableObject {
                         if isNew { nicknamePromptDeviceID = id }
                     }
                     // Copia locale di GarminDevice.xml (solo dispositivi registrati), per i controlli a dispositivo scollegato.
-                    if let xml { DeviceXMLStore.save(xml, forDevice: id) }
+                    if let xml { recoverNotesAfterOutsideUpdate(deviceID: id, newXML: xml); DeviceXMLStore.save(xml, forDevice: id) }
                 }
                 // Numero di serie: subito quello già memorizzato; quello nuovo arriva dalla chiamata a Garmin più sotto.
                 deviceSerial = AppSettings.shared.serialNumber(forDevice: id)
@@ -4235,6 +4326,7 @@ final class AppViewModel: ObservableObject {
             // Registrazione senza proposta di nickname; il file XML serve al controllo all'apertura dell'app.
             AppSettings.shared.recordConnectedDevice(id: id, model: volume.info.description ?? "", softwareVersion: installed ?? "",
                                                      memoryBytes: UInt64(max(volume.totalBytes, 0)), unitID: volume.info.partNumber ?? "")
+            recoverNotesAfterOutsideUpdate(deviceID: id, newXML: volume.xml)
             DeviceXMLStore.save(volume.xml, forDevice: id)
         }
         let xml = volume.xml
@@ -4439,6 +4531,7 @@ final class AppViewModel: ObservableObject {
         servicesSize = 0
         podcastsFolderSize = 0
         status = t("status_disconnected")
+        disconnectedNotice = true
     }
 
     func changeStorage(to id: UInt32) async {
@@ -4475,6 +4568,7 @@ final class AppViewModel: ObservableObject {
         guard let xml = fresh ?? deviceXMLData ?? DeviceXMLStore.load(forDevice: id)?.xml else { return }
         if fresh != nil {
             deviceXMLData = xml
+            recoverNotesAfterOutsideUpdate(deviceID: id, newXML: xml)
             DeviceXMLStore.save(xml, forDevice: id)
         }
         let model = DeviceImageService.modelInfo(fromXML: xml)

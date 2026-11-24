@@ -237,6 +237,7 @@ final class UserProfiles: ObservableObject {
     private func performSwitch(to p: UserProfile, mode: SwitchMode) -> Bool {
         if isBusy { showBusy(); return false }
         let from = number(of: activeID)
+        let previousPrefix = ProfileStorage.activePrefix
         ProfileStorage.activePrefix = p.prefix
         activeID = p.id
         save()
@@ -244,6 +245,10 @@ final class UserProfiles: ObservableObject {
         switch mode {
         case .reload: AppSettings.shared.reloadForProfile()
         case .copyCurrent: AppSettings.shared.copyCurrentToActiveProfile()
+            // I preset del pannello Runners dell'utente di prima passano al nuovo (poi sono indipendenti).
+            if let presets = ProfileDefaults.data(forKey: AppSettings.runnerPresetsKey, prefix: previousPrefix) {
+                ProfileDefaults.shared.set(presets, forKey: AppSettings.runnerPresetsKey)
+            }
         }
         AppViewModel.current?.profileDidChange()
         // La lingua dell'interfaccia cambia subito; i pochi menu di sistema di macOS la seguono al prossimo avvio (come

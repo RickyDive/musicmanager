@@ -4,7 +4,7 @@
 
 A macOS app that transfers music, albums and playlists from the **Music** app library to a **Garmin** watch (Fenix, Forerunner, Edge…) over USB (MTP), and manages what is on the watch.
 
-> **Version 2.5.** Feedback is welcome: open an [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
+> **Version 2.5.1.** Feedback is welcome: open an [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
 > Independent project, not affiliated with or endorsed by Garmin or Apple.
 
 > **Scope:** music flows one way, from your Mac library to the device. The app never copies audio from a device and does not access other devices' libraries. See [docs/SCOPE.md](docs/SCOPE.md).
@@ -51,7 +51,15 @@ open MusicManager.xcodeproj
 To build the DMG: `Scripts/build-release.sh` (see [docs/RELEASING.md](docs/RELEASING.md)).
 
 ## Privacy
-The app sends no data to servers of its own. Optional feature (off by default): the software update check asks Garmin's servers whether a new version exists, sending the contents of `GarminDevice.xml` through an undocumented service.
+The app sends no data to servers of its own. Optional feature (off by default): the check for the watch's software and maps updates asks Garmin's servers whether a new version exists, sending the contents of `GarminDevice.xml` through an undocumented service. The app asks for your consent the first time a watch is connected, and you can change it in Settings.
+
+## What is new in 2.5.1
+- **Fix**: crash when dragging the player's progress bar; clear message when the network drops while a remote library is being copied.
+- **Custom Playlist for runners**: live PacePro forecast in the player (running time, distance, split and pace, runner figure, «km N» signs), **Running Tool** panel with saved settings, PacePro in miles (Settings ▸ General ▸ Running unit), pace calculator, easier PacePro entry, «Mid» song following the middle of the race.
+- **Garmin device**: update notes recovered after an update made outside the app and completed once a day, maps checked together with the software, new device window with summary and consent, remove a single stored device, panel after «Disconnect», «Product Code».
+- **Podcasts**: episode description in the list.
+
+Release text: [docs/RELEASE-NOTES-2.5.1.md](docs/RELEASE-NOTES-2.5.1.md).
 
 ## What is new in 2.5
 - **MusicManager Server**: read a Music library from another Mac through a compact `library.json`, no XML to export by hand (macOS 12 or later on the server side).

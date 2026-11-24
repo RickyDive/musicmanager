@@ -735,7 +735,8 @@ enum GarminUpdateService {
         let state = ((best["releaseState"] as? String) ?? "").lowercased()
         let shownVersion = state.contains("beta") ? "\(version) Beta" : version
         AppLog.debug("Controllo aggiornamento software: stato di rilascio «\(state.isEmpty ? "?" : state)» → mostrata \(shownVersion)")
-        return .available(version: shownVersion, notes: (notes?.isEmpty ?? true) ? nil : notes)
+        // 2.5.1: per le versioni senza novità Garmin può mandare il segnaposto «N/A»: non è un testo da mostrare né da ricordare.
+        return .available(version: shownVersion, notes: DeviceXMLStore.isPlaceholderNotes(notes) ? nil : notes)
     }
 }
 
@@ -858,10 +859,17 @@ enum DeviceXMLStore {
         try? data.write(to: notesFile(id), options: .atomic)
     }
 
-    /// Novità ricordate per una versione (nil se non ce ne sono).
+    /// Testo vuoto o segnaposto come «N/A» (Garmin lo manda quando non ha novità per la versione).
+    static func isPlaceholderNotes(_ text: String?) -> Bool {
+        let t = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return t.isEmpty || t == "n/a" || t == "na"
+    }
+
+    /// Novità ricordate per una versione (nil se non ce ne sono, o se sono solo un segnaposto come «N/A»).
     static func updateNotes(version: String, forDevice id: String) -> String? {
         let key = updateNotesKey(version)
-        return loadUpdateNotes(forDevice: id).first { $0.version == key }?.notes
+        let notes = loadUpdateNotes(forDevice: id).first { $0.version == key }?.notes
+        return isPlaceholderNotes(notes) ? nil : notes
     }
 
     /// Storico delle novità per «Altre versioni…»: dal più recente (per data di uscita, poi per numero), senza la versione già
@@ -870,7 +878,7 @@ enum DeviceXMLStore {
     static func updateNotesHistory(forDevice id: String, excludingVersion: String?, includeBeta: Bool) -> [StoredUpdateNote] {
         let skip = excludingVersion.map(updateNotesKey)
         return loadUpdateNotes(forDevice: id)
-            .filter { $0.version != skip && (includeBeta || $0.channel == "stable") }
+            .filter { $0.version != skip && !isPlaceholderNotes($0.notes) && (includeBeta || $0.channel == "stable") }
             .sorted {
                 let a = $0.released ?? "", b = $1.released ?? ""
                 return a != b ? a > b : $0.version.compare($1.version, options: .numeric) == .orderedDescending
@@ -1061,19 +1069,28 @@ enum GarminUnitInfoService {
         // 2.4 Internal: `graphicUrl` è l'immagine generica del modello («010-04337-00»); `unitPartNumber` è il codice commerciale della
         // variante di QUESTA unità («010-04337-01» = cinturino arancione, «-21» = grafite…). Se la foto della variante esiste sullo
         // stesso sito (res.garmin.com), si usa quella; altrimenti resta l'immagine generica. Non esce nessun dato in più.
+        // 2.5.1: i nomi del file cambiano secondo la linea di prodotto: si prova prima `c1_01_md.png` (fēnix, Venu, Forerunner recenti…),
+        // poi `cf-sm-2x3.png` (Edge, Forerunner 970…). Vale il primo che risponde 200 con un PNG vero (si accetta solo PNG).
+        // Per i prodotti con nomi non derivabili dal codice (UUID, percorso Connect) resta l'immagine generica, poi il Store.
         if let unitPart, unitPart.range(of: #"^\d{3}-\d{5}-\d{2}$"#, options: .regularExpression) != nil,
-           let generic = graphic, generic.host == "res.garmin.com",
-           let variant = URL(string: "https://res.garmin.com/en/products/\(unitPart)/v/c1_01_md.png") {
-            var req = URLRequest(url: variant, timeoutInterval: 10)
-            req.setValue("MusicManager", forHTTPHeaderField: "User-Agent")
-            let got = try? await URLSession.shared.data(for: req)
-            if let (img, resp) = got,
-               (resp as? HTTPURLResponse)?.statusCode == 200, img.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
-                AppLog.debug("immagine: variante \(unitPart) trovata → \(variant.lastPathComponent)")
-                graphic = variant
-            } else {
-                if got == nil { conclusive = false }
-                AppLog.debug("immagine: variante \(unitPart) non disponibile su res.garmin.com → immagine generica")
+           let generic = graphic, generic.host == "res.garmin.com" {
+            var found = false
+            for name in ["c1_01_md.png", "cf-sm-2x3.png"] {
+                guard let variant = URL(string: "https://res.garmin.com/en/products/\(unitPart)/v/\(name)") else { continue }
+                var req = URLRequest(url: variant, timeoutInterval: 10)
+                req.setValue("MusicManager", forHTTPHeaderField: "User-Agent")
+                let got = try? await URLSession.shared.data(for: req)
+                if let (img, resp) = got,
+                   (resp as? HTTPURLResponse)?.statusCode == 200, img.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
+                    AppLog.debug("immagine: variante \(unitPart) trovata → \(name)")
+                    graphic = variant
+                    found = true
+                    break
+                }
+                if got == nil { conclusive = false }   // problema di rete: non ricordare il risultato
+            }
+            if !found {
+                AppLog.debug("immagine: variante \(unitPart) non disponibile su res.garmin.com (c1_01_md.png, cf-sm-2x3.png) → immagine generica")
             }
         }
         return (GarminUnitInfo(serialNumber: text("serialNumber"), graphicURL: graphic,

@@ -74,6 +74,7 @@ struct MiniPlayerView: View {
     @State private var volumeBeforeMute: Float = 0.5
     /// Finestra stretta: controlli più vicini e cursore del volume più corto.
     @Environment(\.compactPane) private var compactPane
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -82,7 +83,7 @@ struct MiniPlayerView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
             if let track {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: customInfo != nil ? 4 : 6) {   // con la tabella Runner gli spazi si stringono
                     // Titolo e artista/album vicini: la riga del titolo ha altezza fissa (le icone di stato, più alte del testo,
                     // non la allargano più) e i due testi stanno in un gruppo con 1 pt di spazio.
                     VStack(alignment: .leading, spacing: 1) {
@@ -108,10 +109,10 @@ struct MiniPlayerView: View {
 
                         HStack {
                             Text(timeString(player.currentTime))
-                                .font(.caption2).foregroundStyle(.secondary)
+                                .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                             Spacer()
                             Text(timeString(player.duration))
-                                .font(.caption2).foregroundStyle(.secondary)
+                                .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                         }
                     }
 
@@ -174,10 +175,23 @@ struct MiniPlayerView: View {
                         volumeControl
                             .frame(maxWidth: .infinity, alignment: .trailing)
                     }
+
+                    // Custom Playlist con PacePro: percorso da 0 km ai km totali, in fondo (allineato al bordo basso della copertina),
+                    // con il runner al posto del cursore. Non si sposta a mano: avanza con la riproduzione (previsione PacePro).
+                    // I dettagli a capsule (`customChips`) per ora non sono mostrati: la loro posizione si decide dopo.
+                    if let c = customInfo, c.trackID == track.id, let fraction = c.liveFraction(elapsed: player.currentTime) {
+                        runnerTable(c)
+                        Spacer(minLength: 0)
+                        RunnerProgressLine(fraction: fraction, isPlaying: player.isPlaying,
+                                           endText: c.totalKm.formatted(.number.precision(.fractionLength(1))) + " " + c.unit)
+                            .help(t("custom_live_forecast_help"))
+                    }
                 }
                 // Larghezza vincolata a quella del pannello: barra di riproduzione e volume seguono la finestra.
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(maxHeight: .infinity, alignment: .top)
+                // Altezza fissa quanto la copertina, ancorata in alto: se il contenuto fosse più alto, eccede in basso e non
+                // sposta più la copertina verso l'alto (2.5.1).
+                .frame(height: height, alignment: .top)
             } else {
                 // Testo allineato a sinistra e centrato in verticale rispetto al riquadro vuoto dell'artwork.
                 TwoLineHint(text: t("player_no_track"))
@@ -270,7 +284,6 @@ struct MiniPlayerView: View {
             }
         } else {
             HStack(spacing: 1) {
-                if let c = customInfo, c.trackID == track.id { customChips(c).padding(.trailing, 6) }
                 Group {
                     if track.isPurchased {
                         Image(systemName: "bag").foregroundStyle(Color.statusNeutral).help(t("purchased_track_help"))
@@ -298,8 +311,111 @@ struct MiniPlayerView: View {
         }
     }
 
-    /// Dettagli della riga nella Custom Playlist, come nell'elenco: numero, «Metà», traguardo, «km N», km di partenza, tempo progressivo.
-    private func customChips(_ c: CustomPlayInfo) -> some View {
+    /// Tabella di quello che un runner vede sul quadrante: tempo di corsa, distanza e frazione PacePro (passo + numero d'ordine). Celle di
+    /// larghezza fissa, allineate a sinistra (come la barra del percorso); il resto della riga a destra resta libero.
+    private func runnerTable(_ c: CustomPlayInfo) -> some View {
+        let elapsed = player.currentTime
+        let time = c.liveRolling(elapsed: elapsed) ?? "—"
+        let km = c.liveKm(elapsed: elapsed, decimals: 2) ?? c.kmStart ?? "—"   // due decimali (es. 7,52 km)
+        let pace = c.livePace(elapsed: elapsed)
+        return HStack(spacing: 0.5) {   // spazio minimo tra le celle: a risoluzione ridotta a destra ne resta poco
+            runnerCell(width: 82) {
+                Image(systemName: "timer.circle").foregroundStyle(Self.runnerAccent).offset(y: -0.5)
+                Text(time)
+            }
+            runnerCell(width: 82) {
+                Image(systemName: "road.lanes").foregroundStyle(Self.runnerAccent).offset(y: -0.5)
+                Text(km)
+            }
+            runnerCell(width: 82, trailing: 1, shrinks: false) {   // meno margine a destra: l'indicatore della frazione sta il più possibile al bordo
+                Image(systemName: "shoe.running.and.shadow.fill").foregroundStyle(Self.runnerAccent).offset(y: -0.5)
+                Text(pace?.pace ?? "—")
+                Spacer(minLength: 0)
+                if let lap = pace?.lap {
+                    // «1.circle» … «12.circle»: la frazione in corso; oltre la dodicesima resta il numero.
+                    if lap <= 12 { Image(systemName: "\(lap).circle").font(.system(size: 12.5)).offset(x: 2) } else { Text("\(lap)") }   // 12,5 pt: il cerchio occupa tutta l'altezza del simbolo e deve stare dentro la cella (15 pt); 2 pt più a destra
+                }
+            }
+            // Cartelli dei km nello spazio a destra: quello del km raggiunto sta fermo a sinistra dell'area; il successivo entra da destra
+            // negli ultimi 50 m e, arrivato, prende il posto del precedente. Al traguardo resta solo la bandierina.
+            kmSignArea(c, elapsed: elapsed)
+                .padding(.leading, 4)   // qualche punto di aria tra la cella del passo e il cartello km
+        }
+        .offset(y: 1)   // tabella 1 pt più in basso; la linea del runner non si sposta
+        .help(t("custom_live_forecast_help"))
+    }
+
+    /// Colore d'accento della corsa sui Garmin (rosso): icone delle tre celle (tranne l'indicatore N.lane, bianco), in un rosso chiaro.
+    private static let runnerAccent = Color(red: 1.0, green: 128/255, blue: 128/255)
+
+    /// Larghezza del cartello «km N» (fissa, per calcolare lo scorrimento).
+    private let kmSignWidth: CGFloat = 54
+
+    private func kmSign(_ n: Int, unit: String) -> some View {
+        // Tema chiaro: turchese più scuro e sfondo un po' più pieno, altrimenti il cartello si legge male; tema scuro invariato.
+        Text("\(unit) \(n)")
+            .font(.caption.weight(.semibold).monospacedDigit())
+            .foregroundStyle(colorScheme == .dark ? Color.teal : Color(red: 0.0, green: 0.40, blue: 0.46))
+            .frame(width: kmSignWidth, height: 15)
+            .background(Color.teal.opacity(colorScheme == .dark ? 0.18 : 0.28), in: Capsule())
+    }
+
+    /// Larghezza approssimata del simbolo della bandierina (15 pt di corpo): serve a farla entrare dal bordo destro come le capsule.
+    private let finishFlagGlyphWidth: CGFloat = 14
+
+    private var finishFlag: some View {
+        Image(systemName: "flag.checkered")
+            .font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.green)
+            .frame(width: kmSignWidth, height: 15, alignment: .leading)
+    }
+
+    private func kmSignArea(_ c: CustomPlayInfo, elapsed: Double) -> some View {
+        let signs = c.liveKmSigns(elapsed: elapsed)
+        return GeometryReader { geo in
+            let travel = max(0, geo.size.width - kmSignWidth)
+            ZStack(alignment: .leading) {
+                if signs.finished {
+                    finishFlag
+                } else {
+                    // Il cartello precedente sfuma mentre il nuovo gli scorre sopra (con poco spazio i due si sovrapporrebbero).
+                    let slide = travel * (1 - signs.progress)
+                    let approaching = signs.approachingKm != nil || signs.approachingFinish
+                    if let reached = signs.reached {
+                        kmSign(reached, unit: c.unit).opacity(approaching ? min(1, slide / kmSignWidth) : 1)
+                    }
+                    if let n = signs.approachingKm {
+                        kmSign(n, unit: c.unit)
+                            .offset(x: slide)
+                            .animation(.linear(duration: 0.25), value: signs.progress)
+                    } else if signs.approachingFinish {
+                        // La bandierina sta a sinistra della sua cella larga come il cartello: per farla entrare dal bordo destro, come le
+                        // capsule km, la si sposta in più della differenza di larghezza; a fine corsa l'extra è zero e la posizione finale è invariata.
+                        finishFlag
+                            .offset(x: slide + (kmSignWidth - finishFlagGlyphWidth) * (1 - signs.progress))
+                            .animation(.linear(duration: 0.25), value: signs.progress)
+                    }
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
+            .clipped()
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 15)
+    }
+
+    private func runnerCell<Content: View>(width: CGFloat, trailing: CGFloat = 6, shrinks: Bool = true, @ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: 3) { content() }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(Color.white)   // testo e icone sempre bianchi al 100% (quadrante scuro, come i Garmin recenti)
+            .lineLimit(1)
+            .minimumScaleFactor(shrinks ? 0.8 : 1)   // con due decimali (es. «12,52 km») il testo si stringe un poco; il passo PacePro no
+            .padding(.leading, 4).padding(.trailing, trailing)
+            .frame(width: width, height: 15, alignment: .leading)
+            .background(Color(white: 0.12).opacity(0.9), in: RoundedRectangle(cornerRadius: 6, style: .continuous))   // grigio molto scuro al 90%: richiama il quadrante nero
+    }
+
+    /// Dettagli della riga nella Custom Playlist (ora in una riga sotto i controlli), come nell'elenco: numero, «Metà», traguardo, «km N», km di partenza, tempo progressivo.
+    private func customChips(_ c: CustomPlayInfo, elapsed: Double) -> some View {
         // Colonne a larghezza fissa, allineate a destra come le icone di stato: restano ferme da un brano all'altro.
         HStack(spacing: 4) {
             Group {
@@ -317,27 +433,27 @@ struct MiniPlayerView: View {
             }.frame(width: 20, alignment: .center)
             Group {
                 if let first = c.crossings.first, let last = c.crossings.last {
-                    Text(first == last ? "km \(first)" : "km \(first)–\(last)")
+                    Text(first == last ? "\(c.unit) \(first)" : "\(c.unit) \(first)–\(last)")
                         .font(.caption.weight(.semibold).monospacedDigit()).foregroundStyle(Color.teal)
                         .padding(.horizontal, 6).frame(height: 16)
                         .background(Color.teal.opacity(0.18), in: Capsule())
                 }
             }.frame(width: 62, alignment: .trailing)
             Group {
-                if let km = c.kmStart, !km.isEmpty {
-                    Text(km.contains("km") || km == "—" ? km : km + " km")
+                if let km = c.liveKm(elapsed: elapsed) ?? c.kmStart, !km.isEmpty {
+                    Text(km.contains(c.unit) || km == "—" ? km : km + " " + c.unit)
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }.frame(width: 52, alignment: .trailing)
             Group {
-                if let r = c.rolling {
+                if let r = c.liveRolling(elapsed: elapsed) ?? c.rolling {
                     Text(r).font(.caption.monospacedDigit()).foregroundStyle(AppSettings.shared.selectionSolidColor)
                 }
-            }.frame(width: 46, alignment: .trailing)
+            }.frame(width: 52, alignment: .trailing)
         }
         .lineLimit(1)
         .fixedSize()
-        .help(c.help)
+        .help(c.help.isEmpty ? t("custom_live_forecast_help") : c.help + "\n" + t("custom_live_forecast_help"))
     }
 
     /// Icona playlist + nome (cliccabile): apre il balloon con i brani già riprodotti, quello in
@@ -618,5 +734,56 @@ final class AudioRouteMonitor: ObservableObject {
             return (.headphones, deviceName)
         }
         return (.other, deviceName)
+    }
+}
+
+
+/// Percorso del runner (Custom Playlist con PacePro): «0» a sinistra, km totali a destra, barra non modificabile e, al posto del
+/// cursore, la figura del runner che corre (saltella mentre il brano suona, ferma in pausa).
+struct RunnerProgressLine: View {
+    let fraction: Double
+    let isPlaying: Bool
+    let endText: String
+    private let runnerSize: CGFloat = 13   // 2.5.1: altezza del glifo = altezza del triangolo Play (misurata dallo screenshot: Play 27 px, runner a 18 pt 38 px → 13 pt)
+
+    /// Di quanto l'intero percorso (barra, runner, km finali) è spostato in basso rispetto alla composizione precedente, senza cambiarne
+    /// posizioni relative né centrature.
+    private let lowering: CGFloat = 0
+
+    var body: some View {
+        HStack(spacing: 6) {
+            GeometryReader { geo in
+                let w = geo.size.width
+                let x = max(0, min(1, fraction)) * w
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.25)).frame(height: 4)
+                    Capsule().fill(Self.runnerOutline).frame(width: x, height: 4)
+                    runner.position(x: min(max(runnerSize / 2, x), w - runnerSize / 2), y: geo.size.height / 2 - 1)
+                }
+                .frame(height: geo.size.height)
+            }
+            .frame(height: 16)
+            Text(endText).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+        }
+        .offset(y: lowering)
+    }
+
+    /// Verde del simbolo `figure.run` di SF Symbols (campionato dallo screenshot di Riccardo, 15/11): richiama il runner di Apple.
+    private static let runnerGreen = Color(red: 98/255, green: 196/255, blue: 81/255)
+
+    /// Ombra: stessa icona, 1 pt più grande, in verde scuro e spostata di 1 pt in basso e a destra, dietro a quella verde (due simboli sovrapposti).
+    private static let runnerOutline = Color(red: 30/255, green: 100/255, blue: 28/255)
+
+    /// Il runner non si anima (il saltello era eccessivo): avanza solo lungo il percorso.
+    private var runner: some View {
+        ZStack {
+            Image(systemName: "figure.run")
+                .font(.system(size: runnerSize, weight: .black))
+                .foregroundStyle(Self.runnerOutline)
+                .offset(x: 0.75, y: 0.75)   // ombra: 0,75 pt in basso e a destra
+            Image(systemName: "figure.run")
+                .font(.system(size: runnerSize, weight: .semibold))
+                .foregroundStyle(Self.runnerGreen)
+        }
     }
 }

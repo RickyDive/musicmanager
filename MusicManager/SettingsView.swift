@@ -238,6 +238,15 @@ struct SettingsView: View {
                     .labelsHidden().toggleStyle(.switch)
             }
 
+            settingRow(t("settings_running_unit"), hint: t("settings_running_unit_hint")) {
+                Picker("", selection: $settings.runningUnit) {
+                    ForEach(AppSettings.RunningUnit.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .labelsHidden()
+            }
+
             settingRow(t("settings_show_only_transferable"), hint: t("settings_show_only_transferable_hint")) {
                 Toggle("", isOn: $settings.showOnlyTransferable)
                     .labelsHidden().toggleStyle(.switch)
@@ -253,16 +262,18 @@ struct SettingsView: View {
 
     /// Riga del modulo: etichetta a sinistra, controllo a destra e, sotto, la nota; tutto in un'unica riga del `Form`
     /// (così il modulo non disegna il divisore tra il controllo e la nota).
-    private func settingRow<Control: View>(_ title: String, hint: String, @ViewBuilder control: () -> Control) -> some View {
+    /// `enabled: false` attenua titolo e spiegazione (i controlli si attenuano da soli con `.disabled`).
+    private func settingRow<Control: View>(_ title: String, hint: String, enabled: Bool = true, @ViewBuilder control: () -> Control) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(title)
+                    .foregroundStyle(enabled ? .primary : .secondary)
                 Spacer(minLength: 12)
                 control()
             }
             Text(hint)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(enabled ? .secondary : .tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -490,8 +501,17 @@ struct SettingsView: View {
     /// Fix Artwork (ricerca online), caricamento automatico da Apple Music, cache.
     private var artworkTab: some View {
         Form {
+            // 1. Caricamento automatico da Music (indipendente dalla ricerca online).
+            settingRow(t("settings_auto_apple_artwork"), hint: t("settings_auto_apple_artwork_hint")) {
+                Toggle("", isOn: $settings.autoLoadAppleArtwork)
+                    .labelsHidden().toggleStyle(.switch)
+            }
+
+            // 2. Gruppo Fix Artwork (ricerca online): interruttore principale e, rientrate sotto, le due opzioni collegate.
             // Toggle con binding personalizzato: accendendolo non si accende subito, ma apre prima
             // l'alert di spiegazione; si accende davvero solo confermando li. Spegnerlo è immediato.
+            // Un solo blocco (VStack) = una sola riga del modulo: nessuna linea di divisione tra le tre voci.
+            VStack(alignment: .leading, spacing: 14) {
             settingRow(t("settings_lookup_artwork"), hint: t("settings_lookup_artwork_hint")) {
                 Toggle("", isOn: Binding(
                     get: { settings.lookupMissingArtworkOnline },
@@ -506,21 +526,21 @@ struct SettingsView: View {
                 .labelsHidden().toggleStyle(.switch)
             }
 
-            settingRow(t("settings_auto_apple_artwork"), hint: t("settings_auto_apple_artwork_hint")) {
-                Toggle("", isOn: $settings.autoLoadAppleArtwork)
-                    .labelsHidden().toggleStyle(.switch)
-            }
-
             // Richiede la ricerca online (Fix Artwork): senza, resta spenta.
-            settingRow(t("settings_propose_shared_artwork"), hint: t("settings_propose_shared_artwork_hint")) {
+            settingRow(t("settings_propose_shared_artwork"), hint: t("settings_propose_shared_artwork_hint"),
+                       enabled: settings.lookupMissingArtworkOnline) {
                 Toggle("", isOn: $settings.proposeSharedArtworkSearch)
                     .labelsHidden().toggleStyle(.switch)
-                    .disabled(!settings.lookupMissingArtworkOnline)
             }
+            .padding(.leading, 22)
+            .disabled(!settings.lookupMissingArtworkOnline)
 
             // Mercato delle ricerche online (copertine e miniature degli artisti): globale, perché la cache è comune a tutti gli utenti.
-            settingRow(t("settings_artwork_store"),
-                       hint: t("settings_artwork_store_hint", ArtworkStore.displayName(ArtworkStore.automaticCode), ArtworkStore.displayName(ArtworkStore.primary))) {
+            settingRow(t("settings_artwork_store") + " – " + t("settings_artwork_store_auto_note", ArtworkStore.displayName(ArtworkStore.automaticCode)),
+                       hint: ArtworkStore.primary == "US"
+                        ? t("settings_artwork_store_hint_us")
+                        : t("settings_artwork_store_hint", ArtworkStore.displayName(ArtworkStore.primary)),
+                       enabled: settings.lookupMissingArtworkOnline) {
                 Picker("", selection: $settings.artworkStoreCountry) {
                     Text(t("settings_artwork_store_auto", ArtworkStore.displayName(ArtworkStore.automaticCode))).tag("")
                     Divider()
@@ -529,9 +549,14 @@ struct SettingsView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(maxWidth: 240)
+                .fixedSize()
+                .frame(maxWidth: 240, alignment: .trailing)
+            }
+            .padding(.leading, 22)
+            .disabled(!settings.lookupMissingArtworkOnline)
             }
 
+            // 3. Cache.
             // Dimensione della cache (stesso corpo delle altre voci) a sinistra e, sulla stessa riga, il pulsante a destra.
             HStack {
                 Text(t("settings_artwork_cache_size",
@@ -669,7 +694,6 @@ struct SettingsView: View {
 
     // MARK: - Devices
 
-    @State private var confirmForgetDevices = false
     private let deviceConnectedColumnWidth: CGFloat = 28
     private let deviceNicknameColumnWidth: CGFloat = 150
     private let deviceSoftwareColumnWidth: CGFloat = 100
@@ -863,7 +887,10 @@ struct SettingsView: View {
                     }
                     .font(.system(size: 11))
                     .frame(height: tableRowHeight)
-                    .background(index % 2 == 1 ? Color.primary.opacity(0.05) : Color.clear)
+                    .background(selectedDeviceID == device.id ? settings.accentColor.opacity(0.28)
+                                : (index % 2 == 1 ? Color.primary.opacity(0.05) : Color.clear))
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(TapGesture().onEnded { selectedDeviceID = device.id })
                 }
                 ForEach(settings.knownDevices.count..<max(tableVisibleRows, settings.knownDevices.count), id: \.self) { index in
                     (index % 2 == 1 ? Color.primary.opacity(0.05) : Color.clear).frame(height: tableRowHeight)
@@ -871,23 +898,32 @@ struct SettingsView: View {
                 }
                 }
             }
+            .onChange(of: focusedDeviceNickname) { _, new in
+                if let new { selectedDeviceID = new }
+            }
             .frame(height: tableRowHeight * CGFloat(tableVisibleRows + 1) + 1)
             .clipShape(RoundedRectangle(cornerRadius: 4))
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.4)))
 
             HStack(spacing: 10) {
-                Text(t("devices_hint")).font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // Pulsante «−» nello stesso stile delle sorgenti esterne: toglie solo il dispositivo selezionato.
+                HStack(spacing: 0) {
+                    Button { removeSelectedDevice() } label: { Image(systemName: "minus").frame(width: 28, height: 22).contentShape(Rectangle()) }
+                        .disabled(selectedDeviceID == nil || !settings.knownDevices.contains { $0.id == selectedDeviceID })
+                        .help(t("device_remove_help"))
+                }
+                .buttonStyle(.plain)
+                .background(.quaternary.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
                 Spacer(minLength: 10)
-                Button(t("button_forget_devices")) { confirmForgetDevices = true }
-                    .disabled(settings.knownDevices.isEmpty)
+                // Controllo (opzionale) degli aggiornamenti sui server Garmin: interruttore allineato a «Montaggio automatico».
+                Text(t("settings_check_device_updates")).font(.caption).foregroundStyle(.secondary)
+                Toggle("", isOn: $settings.checkDeviceUpdates)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
             }
-
-            Divider().padding(.top, 4)
-
-            // Controllo (opzionale) dell'aggiornamento software del dispositivo sui server Garmin.
-            Toggle(t("settings_check_device_updates"), isOn: $settings.checkDeviceUpdates)
-
+            Text(t("devices_hint")).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Text(t("settings_check_device_updates_hint"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -907,12 +943,33 @@ struct SettingsView: View {
                 }
             }
         }
-        .alert(t("alert_forget_devices_title"), isPresented: $confirmForgetDevices) {
-            Button("OK", role: .destructive) { settings.knownDevices = []; DeviceXMLStore.removeAll() }
-            Button("Cancel", role: .cancel) {}
+        .alert(t("alert_forget_device_title"), isPresented: Binding(
+            get: { pendingRemoveDeviceID != nil },
+            set: { if !$0 { pendingRemoveDeviceID = nil } }
+        )) {
+            Button(t("button_remove"), role: .destructive) {
+                if let id = pendingRemoveDeviceID {
+                    focusedDeviceNickname = nil
+                    settings.knownDevices.removeAll { $0.id == id }
+                    DeviceXMLStore.remove(forDevice: id)
+                    selectedDeviceID = nil
+                }
+                pendingRemoveDeviceID = nil
+            }
+            Button(t("button_cancel"), role: .cancel) { pendingRemoveDeviceID = nil }
         } message: {
-            Text(t("alert_forget_devices_message"))
+            let d = settings.knownDevices.first { $0.id == pendingRemoveDeviceID }
+            Text(t("alert_forget_device_message", (d?.nickname.isEmpty == false ? d?.nickname : d?.model) ?? ""))
         }
+    }
+
+    /// Dispositivo selezionato nella tabella e dispositivo di cui si chiede conferma di rimozione.
+    @State private var selectedDeviceID: String?
+    @State private var pendingRemoveDeviceID: String?
+
+    private func removeSelectedDevice() {
+        guard let id = selectedDeviceID, settings.knownDevices.contains(where: { $0.id == id }) else { return }
+        pendingRemoveDeviceID = id
     }
 
     // MARK: - Remote Libraries

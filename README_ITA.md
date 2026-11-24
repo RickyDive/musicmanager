@@ -4,7 +4,7 @@
 
 App per macOS che trasferisce musica, album e playlist dalla libreria dell'app **Musica** a un orologio **Garmin** (Fenix, Forerunner, Edge…) via USB (MTP), e ne gestisce il contenuto.
 
-> **Versione 2.5.** Il feedback è benvenuto: apri una [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
+> **Versione 2.5.1.** Il feedback è benvenuto: apri una [Issue](https://github.com/RickyDive/musicmanager/issues/new/choose).
 > Progetto indipendente, non affiliato né approvato da Garmin o Apple.
 
 > **Ambito:** la musica va in un solo senso, dalla libreria del Mac al dispositivo. L'app non copia mai audio da un dispositivo e non accede alle librerie di altri dispositivi. Vedi [docs/SCOPE.md](docs/SCOPE.md).
@@ -50,7 +50,15 @@ open MusicManager.xcodeproj
 Per creare il DMG: `Scripts/build-release.sh` (vedi [docs/RELEASING.md](docs/RELEASING.md)).
 
 ## Note sulla privacy
-L'app non invia dati a server propri. Funzione opzionale (spenta di default): il controllo aggiornamenti software chiede ai server Garmin se esiste una nuova versione, inviando il contenuto di `GarminDevice.xml` tramite un servizio non documentato.
+L'app non invia dati a server propri. Funzione opzionale (spenta di default): il controllo degli aggiornamenti software e mappe dell'orologio chiede ai server Garmin se esiste una nuova versione, inviando il contenuto di `GarminDevice.xml` tramite un servizio non documentato. L'app chiede il consenso la prima volta che si collega un orologio, e lo si cambia in Impostazioni.
+
+## Novità della 2.5.1
+- **Correzioni**: crash trascinando la barra di avanzamento del player; messaggio chiaro quando la rete cade durante la copia di una libreria remota.
+- **Custom Playlist per chi corre**: previsione PacePro in tempo reale nel player (tempo di corsa, distanza, frazione e passo, figura del runner, cartelli «km N»), pannello **Utilità Running** con impostazioni salvate, PacePro in miglia (Impostazioni ▸ Generali ▸ Running unit), calcolatore del passo, inserimento PacePro più comodo, brano «Metà» che segue la metà della gara.
+- **Dispositivo Garmin**: note degli aggiornamenti recuperate dopo un aggiornamento fatto fuori dall'app e completate una volta al giorno, mappe controllate insieme al software, finestra di nuovo dispositivo con riepilogo e consenso, rimozione di un singolo dispositivo memorizzato, pannello dopo «Disconnetti», «Cod. Prodotto».
+- **Podcast**: descrizione dell'episodio nell'elenco.
+
+Testo del rilascio: [docs/RELEASE-NOTES-2.5.1.md](docs/RELEASE-NOTES-2.5.1.md).
 
 ## Novità della 2.5
 - **MusicManager Server**: legge la libreria di Musica di un altro Mac tramite un `library.json` compatto, senza esportare a mano un XML (macOS 12 o successivo sul lato server).

@@ -185,3 +185,22 @@ Install from the DMG on a Mac without Homebrew (ideally a clean one; use `xattr 
 13. **User profiles** (experimental, off by default): with the switch on, each user keeps their own settings, language, devices and external sources.
 14. **Slow or missing network** while copying from an external source: the transfer reports the error and does not hang.
 15. Quit the app, reopen it, and check Help ▸ Copy Diagnostic Information and the log (Settings ▸ «Detailed log») after each scenario that failed.
+
+## 2.5.1 — what to test
+Install from the DMG as for 2.5 (`xattr -cr`, see [INSTALL.md](INSTALL.md)), then:
+1. **Scrubbing the player**: drag the progress bar fast and repeatedly (from Songs, Albums and the Custom Playlist), also with rapid skips: no crash.
+2. **Running Tool** (runner button of the Custom Playlist): sections «Block numbering» and «PacePro»; type a few splits; the live forecast appears in the player (running time, distance with two decimals, split and pace, runner figure, «km N» signs; the finish flag enters from the right edge like the signs). It is a forecast: it holds if the Custom plays from the start, in order.
+3. **Saved settings**: save the panel with a name, change it, recall it; delete it. With user profiles on, each user has their own.
+4. **Miles**: switch km | mi in the panel (values are converted and, going back, restored exactly); Settings ▸ General ▸ Running unit (Automatic, Kilometres, Miles) changes the panel's unit too.
+5. **Pace calculator**: type two of distance, time and pace, check the third; the clipboard button copies distance and pace into PacePro and turns PacePro and rolling time on; «Clear PacePro» empties the three fields.
+6. **PacePro entry**: a pace such as 6:89 is refused; «6:8» becomes «6:08» on leaving the field; the first value goes to the first row; rows are put in order when the panel closes.
+7. **«Mid» song**: with PacePro on it is the song where the middle of the race falls; without PacePro, the middle of the playlist.
+8. **Custom list**: the time column does not move at the hour (also with a narrow window and playlists over 10 hours); the selected row keeps time, distance and «km N» legible; covers that come from Music's cache appear when the list loads.
+9. **New device window** (forget the device in Settings ▸ Advanced ▸ Devices first): summary, product image, and, with updates check off, the consent checkbox. Choose Skip without a nickname: the small panel explains where to set it. Check the three cases of the consent (off/consent, off/refuse, on/refuse).
+10. **Software and maps updates**: «Update available» window and capsule; maps globe red when a stored map has an update; the maps line (one generic red line) in the update window; notes recovered after updating the watch outside the app; a clear message when Garmin has no notes.
+11. **Settings ▸ Advanced ▸ Devices**: select a row, «−» removes only that device (with confirmation).
+12. **Disconnect**: the panel says that the watch is no longer active in Music Manager but still connected, and that it must be ejected with its own function; Connect brings it back at once.
+13. **Device panel**: «Product Code» / «Cod. Prodotto» on one line, also with a narrow window and in Italian; product image for another model if available (Forerunner 970, Edge).
+14. **Remote library, network lost while copying**: with the Wi-Fi or the VPN dropped during the copy, a clear message appears and the next attempt works.
+15. **Podcasts**: each episode shows its description under the detail line (up to two lines).
+16. Quit the app, reopen it, and check Help ▸ Copy Diagnostic Information and the log (Settings ▸ «Detailed log») after each scenario that failed.

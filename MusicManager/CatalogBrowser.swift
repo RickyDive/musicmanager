@@ -29,6 +29,131 @@ struct CustomPlayInfo: Equatable {
     var finish: Bool
     var isMid: Bool
     var help: String
+    // Valori «live» (2.5.1): previsione secondo il PacePro, non una misura. Valgono se la Custom suona dall'inizio, in ordine e senza salti.
+    /// Secondi di playlist a cui parte questo brano (somma delle durate dei precedenti).
+    var startSeconds: Double = 0
+    /// Frazioni PacePro appiattite [distanza km, passo s/km, distanza, passo…]; vuoto = km non mostrato.
+    var liveSegments: [Double] = []
+    /// Ritardo di partenza in secondi (il PacePro parte dopo questo tempo di playlist).
+    var liveDelay: Double = 0
+    /// « km» o « mi» (o vuoto a pannello stretto), come nella colonna dei km di partenza.
+    var kmSuffix: String = ""
+    /// Unità di misura delle frazioni PacePro: «km» o «mi». I calcoli sono identici (distanza × passo per unità): cambia solo l'etichetta.
+    var unit: String = "km"
+
+    /// Tempo progressivo di playlist dopo `elapsed` secondi suonati di questo brano.
+    func liveRolling(elapsed: Double) -> String? {
+        guard rolling != nil else { return nil }
+        let seconds = startSeconds + max(0, elapsed)
+        return seconds < 0.5 ? "0:00" : formatDuration(seconds)
+    }
+
+    /// Distanza totale del PacePro in km (0 se non ci sono frazioni).
+    var totalKm: Double {
+        var sum = 0.0, i = 0
+        while i + 1 < liveSegments.count { sum += liveSegments[i]; i += 2 }
+        return sum
+    }
+
+    /// Avanzamento lungo il percorso (0…1) dopo `elapsed` secondi suonati: km previsti / km totali. Prima della partenza 0, oltre il traguardo 1.
+    func liveFraction(elapsed: Double) -> Double? {
+        let total = totalKm
+        guard total > 0 else { return nil }
+        let t = startSeconds + max(0, elapsed) - liveDelay
+        if t <= 0 { return 0 }
+        var cumT = 0.0, cumD = 0.0, i = 0
+        while i + 1 < liveSegments.count {
+            let dist = liveSegments[i], sec = liveSegments[i + 1]
+            let end = cumT + dist * sec
+            if t < end { return min(1, (cumD + (t - cumT) / sec) / total) }
+            cumT = end; cumD += dist
+            i += 2
+        }
+        return 1
+    }
+
+    /// Cartelli dei chilometri alla posizione prevista dopo `elapsed` secondi suonati.
+    /// - `reached`: l'ultimo km intero superato (il cartello che resta fermo al suo posto).
+    /// - `approachingKm` / `approachingFinish`: il cartello successivo (km intero o traguardo), se è entro `window` km (50 m); `progress` va da
+    ///   0 (a 50 m) a 1 (raggiunto) e serve a farlo scorrere da destra fino al suo posto, dove prende il posto del precedente.
+    /// - `finished`: traguardo raggiunto; resta solo la bandierina.
+    func liveKmSigns(elapsed: Double, window: Double = 0.05) -> KmSigns {
+        var out = KmSigns()
+        guard liveSegments.count >= 2 else { return out }
+        let t = startSeconds + max(0, elapsed) - liveDelay
+        if t < 0 { return out }
+        let finishKm = totalKm
+        var cumT = 0.0, cumD = 0.0, i = 0
+        var km = finishKm   // oltre il traguardo si resta al totale
+        while i + 1 < liveSegments.count {
+            let dist = liveSegments[i], sec = liveSegments[i + 1]
+            let end = cumT + dist * sec
+            if t < end { km = cumD + (t - cumT) / sec; break }
+            cumT = end; cumD += dist
+            i += 2
+        }
+        if km >= finishKm - 0.000001 { out.finished = true; return out }
+        let whole = Int(km.rounded(.down))
+        if whole >= 1 { out.reached = whole }
+        let next = whole + 1
+        // Il prossimo traguardo di strada è il km intero successivo, oppure (se non ce n'è prima) la linea di arrivo.
+        let targetKm = Double(next) < finishKm ? Double(next) : finishKm
+        if targetKm - km <= window {
+            out.progress = min(1, max(0, 1 - (targetKm - km) / window))
+            if Double(next) < finishKm { out.approachingKm = next } else { out.approachingFinish = true }
+        }
+        return out
+    }
+
+    /// Frazione PacePro in corso dopo `elapsed` secondi suonati: numero d'ordine (da 1) e passo «m:ss» per km. Prima della partenza è la
+    /// prima frazione, dopo il traguardo l'ultima.
+    func livePace(elapsed: Double) -> (lap: Int, pace: String)? {
+        guard liveSegments.count >= 2 else { return nil }
+        func text(_ sec: Double) -> String {
+            let total = Int(sec.rounded())
+            return String(format: "%d:%02d", total / 60, total % 60)
+        }
+        let t = startSeconds + max(0, elapsed) - liveDelay
+        var cumT = 0.0, i = 0, last = (lap: 1, pace: text(liveSegments[1]))
+        while i + 1 < liveSegments.count {
+            let dist = liveSegments[i], sec = liveSegments[i + 1]
+            last = (lap: i / 2 + 1, pace: text(sec))
+            if t < cumT + dist * sec { return last }
+            cumT += dist * sec
+            i += 2
+        }
+        return last
+    }
+
+    /// Km raggiunti dopo `elapsed` secondi suonati, al passo della frazione PacePro in cui cade il momento (cambi di passo compresi).
+    func liveKm(elapsed: Double, decimals: Int = 1) -> String? {
+        guard kmStart != nil, liveSegments.count >= 2 else { return nil }
+        let t = startSeconds + max(0, elapsed) - liveDelay
+        if t < 0 { return "—" }
+        var cumT = 0.0, cumD = 0.0
+        var i = 0
+        while i + 1 < liveSegments.count {
+            let dist = liveSegments[i], sec = liveSegments[i + 1]
+            let end = cumT + dist * sec
+            if t < end {
+                let km = cumD + (t - cumT) / sec
+                return km.formatted(.number.precision(.fractionLength(decimals))) + kmSuffix
+            }
+            cumT = end; cumD += dist
+            i += 2
+        }
+        // Oltre il traguardo i km restano al totale del PacePro (non si torna al valore di partenza del brano).
+        return totalKm.formatted(.number.precision(.fractionLength(decimals))) + kmSuffix
+    }
+}
+
+/// Cartelli dei km nel player (vedi `CustomPlayInfo.liveKmSigns`).
+struct KmSigns {
+    var reached: Int?
+    var approachingKm: Int?
+    var approachingFinish = false
+    var progress = 0.0
+    var finished = false
 }
 
 @MainActor final class CustomPlayInfoStore: ObservableObject {
@@ -301,6 +426,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     private var customSpeakerSlot: CGFloat { compactPane ? 15 : 19 }
     /// Finestra stretta (metà pannello < 720 pt) nella Custom Playlist: tutte le colonne della riga si stringono (spazi, badge, tempi, «km N»).
     private var tightCustom: Bool { category == .customPlaylist && compactPane }
+    @Environment(\.colorScheme) private var colorScheme
     /// Sequenza dei blocchi (temporanea, solo per la Custom aperta): fino a 6 valori che si ripetono; il numero a sinistra dei brani
     /// riparte da 1 a ogni blocco. Campi vuoti ignorati; tutti vuoti = numerazione sequenziale 1…N.
     @State private var customSequenceFields = Array(repeating: "", count: 6)
@@ -316,6 +442,35 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     @State private var customPacePace = Array(repeating: "", count: 12)
     /// Minuti tra l'inizio della musica e il via della gara (0 = si parte insieme).
     @State private var customPaceDelay = "0"
+    /// Unità delle frazioni: «km» o «mi» (miglia). Iniziale dalla regione del Mac (USA, Regno Unito → miglia); si cambia nel pannello e si salva nei preset.
+    /// I calcoli non cambiano (tempo = distanza × passo per unità, qualunque sia l'unità): cambiano solo le etichette.
+    @State private var customPaceUnit: String = AppSettings.shared.resolvedRunningUnit
+    /// Ultima unità delle Impostazioni già applicata al pannello: se cambia mentre il pannello non è vivo (altra scheda, finestra Impostazioni),
+    /// la modifica si applica all'apertura. La scelta manuale con il selettore km | mi non la tocca.
+    @State private var appliedRunningUnit: String = AppSettings.shared.resolvedRunningUnit
+    /// Campo del passo che ha il cursore (alla sua uscita il testo viene completato: «6:8» → «6:08»).
+    /// 0…11 = passo n. 1…12; 100…111 = km; 200 = attesa. Tutti i campi sono segnati, così ogni cambio di campo si nota.
+    @FocusState private var focusedPace: Int?
+    /// Preset con nome del pannello (per utente): salvataggio in linea nella riga del titolo, richiamo e eliminazione dal menù «Salvati».
+    @State private var runnerPresets: [RunnerPreset] = []
+    @State private var savingPreset = false
+    @State private var presetName = ""
+    /// Preset richiamato (o salvato) per ultimo: compare nel titolo del pannello e come nome proposto al salvataggio.
+    @State private var activePresetName: String?
+    /// Vero mentre si applica un preset: i meccanismi automatici (accensione di PacePro, spostamento nel campo 1) non devono intervenire.
+    @State private var applyingPreset = false
+    /// Ultima conversione km ↔ miglia fatta dal selettore: se si torna all'unità di prima senza aver toccato i valori, si rimettono quelli
+    /// originali (senza gli arrotondamenti dell'andata e ritorno).
+    @State private var unitConversion: UnitConversionBackup?
+    /// Calcolatrice (distanza, tempo h:mm, passo m:ss): due valori danno il terzo. `calcRecent` = campi modificati per ultimi (0 dist, 1 tempo,
+    /// 2 passo); `calcComputed` = campo che ha scritto la calcolatrice; `calcOwn` = testo scritto da noi, da non trattare come modifica dell'utente.
+    @State private var calcDist = ""
+    @State private var calcTime = ""
+    @State private var calcPace = ""
+    @State private var calcRecent: [Int] = []
+    @State private var calcComputed: (index: Int, text: String)?
+    @State private var calcOwn: [Int: String] = [:]
+    private var pendingPaceIndex: Int? { focusedPace.flatMap { $0 < 100 ? $0 : nil } }
 
     /// Informazioni PacePro di una riga: km di partenza del brano, chilometri interi superati durante il brano, traguardo, tooltip.
     struct PaceRowInfo {
@@ -333,6 +488,368 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         if parts.count == 1, let m = Double(parts[0]) { return m * 60 }
         if parts.count == 2, let m = Int(parts[0]), let sec = Int(parts[1]), sec < 60 { return Double(m * 60 + sec) }
         return nil
+    }
+    /// Controllo mentre si scrive il passo «m:ss»: solo cifre e un due punti, al massimo due cifre per i minuti e due per i secondi, e secondi da 00 a 59.
+    /// Se il testo non è ammesso (es. «6:89», anche incollato) resta il valore precedente.
+    private static func cleanPace(_ text: String, previous: String) -> String {
+        let filtered = text.filter { $0.isNumber || $0 == ":" }
+        let parts = filtered.split(separator: ":", omittingEmptySubsequences: false)
+        var valid = parts.count <= 2 && parts[0].count <= 2
+        if valid, parts.count == 2 {
+            valid = parts[1].count <= 2 && (parts[1].isEmpty || (Int(parts[1]) ?? 99) < 60)
+        }
+        if valid { return filtered }
+        return previous == text ? "" : previous
+    }
+    /// Completa un passo scritto a metà quando si esce dal campo: «6:8» → «6:08», «6:» → «6:00», «7» → «7:00», «:30» → «0:30».
+    private static func completedPace(_ text: String) -> String {
+        guard !text.isEmpty else { return text }
+        let parts = text.split(separator: ":", omittingEmptySubsequences: false)
+        let m = parts[0].isEmpty ? 0 : (Int(parts[0]) ?? 0)
+        let sec = parts.count > 1 ? (Int(parts[1]) ?? 0) : 0
+        return "\(m):" + String(format: "%02d", min(sec, 59))
+    }
+    /// Mette il cursore (alla fine del testo) nel primo campo del pannello con quel segnaposto («km» o «m:ss»), cioè quello in alto a sinistra.
+    /// Con AppKit perché il focus di SwiftUI, dentro questo pannello, non cambiava il campo che ha davvero il cursore; i campi non si cercano
+    /// per identificatore (SwiftUI non lo passa sempre al campo di testo) ma per segnaposto e posizione.
+    private func focusFirstPaceField(placeholder: String, attempt: Int = 0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.05 : 0.15)) {
+            // Il pannello è una finestra a sé (popover), che non è sempre quella «chiave»: si cercano i campi in tutte le finestre dell'app.
+            let width: CGFloat = placeholder == "m:ss" ? 50 : 56
+            var best: (win: NSWindow, field: NSTextField)?
+            var wins: [NSWindow] = []
+            for w in NSApp.windows { wins.append(w); wins.append(contentsOf: w.childWindows ?? []) }
+            for win in wins {
+                guard win.isVisible, let root = win.contentView else { continue }
+                var all: [NSTextField] = []
+                func walk(_ v: NSView) {
+                    if let t = v as? NSTextField, t.isEditable { all.append(t) }
+                    v.subviews.forEach(walk)
+                }
+                walk(root)
+                // Per segnaposto; se SwiftUI non lo espone, per larghezza (km = 56 pt, m:ss = 50 pt, vedi `paceCell`).
+                // I campi del calcolatore (più larghi/stretti di un campo di PacePro) non vanno confusi con la riga 1.
+                var found = all.filter { $0.placeholderString == placeholder && abs($0.bounds.width - width) < 1.5 }
+                if found.isEmpty { found = all.filter { abs($0.bounds.width - width) < 1.5 } }
+                // In alto a sinistra: coordinate della finestra, y più alta = più in alto.
+                let top = found.min {
+                    let a = $0.convert($0.bounds, to: nil), b = $1.convert($1.bounds, to: nil)
+                    if abs(a.maxY - b.maxY) > 4 { return a.maxY > b.maxY }
+                    return a.minX < b.minX
+                }
+                if let top, found.count > 1 || best == nil { best = (win, top) }
+            }
+            guard let best else { return }
+            if best.win.makeFirstResponder(best.field) {
+                best.field.currentEditor()?.selectedRange = NSRange(location: (best.field.stringValue as NSString).length, length: 0)
+            } else {
+                if attempt == 0 { focusFirstPaceField(placeholder: placeholder, attempt: 1) }
+            }
+        }
+    }
+    /// Alla chiusura del pannello: le frazioni compilate salgono in ordine, senza righe vuote in mezzo (la 4, la 7 e l'11 diventano 2, 3 e 4).
+    /// Ogni riga (km + passo) si sposta intera e l'ordine relativo non cambia.
+    private func compactPaceRows() {
+        let (dist, pace) = Self.compactedPaceRows(customPaceDist, customPacePace)
+        if dist != customPaceDist { customPaceDist = dist }
+        if pace != customPacePace { customPacePace = pace }
+    }
+    private static func compactedPaceRows(_ dist: [String], _ pace: [String]) -> ([String], [String]) {
+        let rows = dist.indices.compactMap { i -> (String, String)? in
+            dist[i].isEmpty && pace[i].isEmpty ? nil : (dist[i], pace[i])
+        }
+        let n = dist.count
+        return (rows.map(\.0) + Array(repeating: "", count: n - rows.count),
+                rows.map(\.1) + Array(repeating: "", count: n - rows.count))
+    }
+
+    // MARK: Calcolatrice distanza / tempo / passo
+
+    /// Tre campi stretti con la didascalia sopra (come le spiegazioni) e il pulsante che copia distanza e passo nel campo 1 di PacePro.
+    private var paceCalculator: some View {
+        // I tre campi sono il centro del gruppo (così si centrano sull'asse verticale del pannello); il pulsante sta fuori, a destra.
+        HStack(spacing: 2) {
+            // Un solo titolo centrato sopra i tre campi; dentro ogni campo il segnaposto dice che valore va inserito.
+            // Larghezze diverse da quelle dei campi di PacePro (56 e 50): `focusFirstPaceField` le usa per riconoscere la riga 1.
+            calcField(placeholder: customPaceUnit, text: $calcDist, width: 58)
+            calcField(placeholder: "hh:mm", text: $calcTime, width: 46)
+            calcField(placeholder: "m:ss", text: $calcPace, width: 53)
+        }
+        .overlay(alignment: .top) {
+            Text(t("calc_title")).font(.caption).foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize()
+                .offset(y: -15)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .trailing) {
+            let canCopy = Self.parseKm(calcDist).map { $0 > 0 } == true && (Self.parsePace(calcPace).map { $0 > 0 }) == true
+            Button { copyCalcToFirstRow() } label: { Image(systemName: "doc.on.clipboard") }
+                .buttonStyle(.plain)   // senza sfondo: solo l'icona, nel colore d'accento quando è attiva
+                .foregroundStyle(canCopy ? Color.accentColor : Color.secondary.opacity(0.5))
+                .alignmentGuide(.trailing) { d in d[.leading] - 8 }   // subito a destra dei campi, senza spostarli
+                .disabled(!canCopy)
+                .help(t("calc_copy_help"))
+        }
+        .help(t("calc_help"))
+    }
+
+    private func calcField(placeholder: String, text: Binding<String>, width: CGFloat) -> some View {
+        TextField(placeholder, text: text)
+            .font(.caption.monospacedDigit())   // testo più piccolo e a cifre fisse: il campo diventa molto meno alto
+            .controlSize(.small)
+            .multilineTextAlignment(.center)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: width)
+    }
+
+    /// Tempo «h:mm» (o solo ore) in secondi.
+    private static func parseClock(_ text: String) -> Double? {
+        let parts = text.split(separator: ":", omittingEmptySubsequences: false)
+        guard let h = Double(parts[0].isEmpty ? "0" : String(parts[0])) else { return nil }
+        if parts.count == 1 { return h * 3600 }
+        let m = parts[1].isEmpty ? 0 : (Double(parts[1]) ?? 0)
+        return h * 3600 + m * 60
+    }
+
+    private func calcValue(_ i: Int) -> Double? {
+        let v: Double?
+        switch i {
+        case 0: v = Self.parseKm(calcDist)
+        case 1: v = Self.parseClock(calcTime)
+        default: v = Self.parsePace(calcPace)
+        }
+        if let v, v > 0 { return v }
+        return nil
+    }
+
+    private func setCalc(_ i: Int, _ text: String) {
+        calcOwn[i] = text
+        switch i {
+        case 0: calcDist = text
+        case 1: calcTime = text
+        default: calcPace = text
+        }
+    }
+
+    /// Un campo della calcolatrice è cambiato: con due valori validi (i due modificati per ultimi) si ricalcola il terzo.
+    private func calcEdited(_ i: Int) {
+        let text = [calcDist, calcTime, calcPace][i]
+        if calcOwn[i] == text { calcOwn[i] = nil; return }   // scritto dalla calcolatrice o dalla conversione
+        calcOwn[i] = nil
+        if calcComputed?.index == i { calcComputed = nil }
+        calcRecent.removeAll { $0 == i }
+        if text.isEmpty {
+            // Campo svuotato: il risultato che ne dipendeva non è più valido.
+            if let c = calcComputed { calcComputed = nil; setCalc(c.index, "") }
+            return
+        }
+        calcRecent = Array(([i] + calcRecent).prefix(2))
+        guard calcRecent.count == 2, let a = calcValue(calcRecent[0]), calcValue(calcRecent[1]) != nil else { return }
+        _ = a
+        let target = 3 - calcRecent[0] - calcRecent[1]
+        let d = calcValue(0), T = calcValue(1), p = calcValue(2)
+        var result: String?
+        switch target {
+        case 0:   // distanza = tempo ÷ passo
+            if let T, let p { result = Self.distanceText(T / p) }
+        case 1:   // tempo = distanza × passo, al minuto
+            if let d, let p {
+                let minutes = Int((d * p / 60).rounded())
+                result = "\(minutes / 60):" + String(format: "%02d", minutes % 60)
+            }
+        default:  // passo = tempo ÷ distanza, al secondo
+            if let d, let T {
+                let seconds = Int((T / d).rounded())
+                result = "\(seconds / 60):" + String(format: "%02d", seconds % 60)
+            }
+        }
+        guard let result else { return }
+        calcComputed = (target, result)
+        setCalc(target, result)
+    }
+
+    /// Copia distanza e passo della calcolatrice nel campo 1 di PacePro.
+    private func copyCalcToFirstRow() {
+        guard let d = Self.parseKm(calcDist), d > 0, Self.parsePace(calcPace) != nil else { return }
+        customPaceDist[0] = calcDist
+        customPacePace[0] = Self.completedPace(calcPace)
+        // Dati messi in PacePro: la funzione si attiva da sola (e con lei il tempo progressivo), come scrivendo a mano il primo valore.
+        if !customShowKm { customShowKm = true }
+        if !customRollingTime { customRollingTime = true }
+    }
+
+    /// Svuota i tre campi del calcolatore e dimentica quali erano stati calcolati.
+    private func clearCalc() {
+        calcOwn = [:]
+        calcComputed = nil
+        calcRecent = []
+        calcDist = ""
+        calcTime = ""
+        calcPace = ""
+    }
+
+    // MARK: Conversione km ↔ miglia
+
+    /// Cambio di unità fatto dall'utente (selettore o Impostazioni): converte i valori già scritti. Un preset richiamato imposta l'unità
+    /// direttamente (`customPaceUnit`), senza conversione: i suoi valori sono già in quell'unità.
+    private func setPaceUnit(_ new: String) {
+        let old = customPaceUnit
+        guard old != new else { return }
+        convertPaceUnit(from: old, to: new)
+        customPaceUnit = new
+    }
+
+    struct UnitConversionBackup {
+        var fromUnit: String, toUnit: String
+        var fromDist: [String], fromPace: [String]
+        var toDist: [String], toPace: [String]
+    }
+    /// Calcolata e non memorizzata: i tipi generici non ammettono proprietà statiche memorizzate.
+    private static var kmPerMile: Double { 1.609344 }
+
+    /// Distanza scritta con la virgola o il punto del Mac, al massimo 3 decimali e 6 caratteri (la larghezza del campo), senza zeri finali.
+    private static func distanceText(_ value: Double) -> String {
+        for digits in [3, 2, 1, 0] {
+            let f = NumberFormatter()
+            f.locale = .current
+            f.usesGroupingSeparator = false
+            f.minimumFractionDigits = 0
+            f.maximumFractionDigits = digits
+            if let text = f.string(from: NSNumber(value: value)), text.count <= 6 { return text }
+        }
+        return String(Int(value.rounded()))
+    }
+
+    /// Converte distanze e passi già scritti tra km e miglia: distanza ÷ 1,609344 (km → mi), passo × 1,609344 (al km → al miglio); l'inverso al ritorno.
+    /// I campi vuoti o non leggibili restano com'erano; il passo si arrotonda al secondo. Il ritardo iniziale (minuti) non cambia.
+    private func convertPaceUnit(from old: String, to new: String) {
+        let toMiles = old == "km" && new == "mi"
+        // Anche la calcolatrice: distanza e passo si convertono (il tempo no); sono scritture nostre, non modifiche dell'utente.
+        if let d = Self.parseKm(calcDist), d > 0 {
+            let text = Self.distanceText(toMiles ? d / Self.kmPerMile : d * Self.kmPerMile)
+            setCalc(0, text)
+            if calcComputed?.index == 0 { calcComputed = (0, text) }
+        }
+        if let p = Self.parsePace(calcPace), p > 0 {
+            let seconds = Int((toMiles ? p * Self.kmPerMile : p / Self.kmPerMile).rounded())
+            let text = "\(seconds / 60):" + String(format: "%02d", seconds % 60)
+            setCalc(2, text)
+            if calcComputed?.index == 2 { calcComputed = (2, text) }
+        }
+        if let b = unitConversion, b.fromUnit == new, b.toUnit == old, b.toDist == customPaceDist, b.toPace == customPacePace {
+            customPaceDist = b.fromDist
+            customPacePace = b.fromPace
+            unitConversion = nil
+            return
+        }
+        let oldDist = customPaceDist, oldPace = customPacePace
+        let newDist = oldDist.map { text -> String in
+            guard let d = Self.parseKm(text), d > 0 else { return text }
+            return Self.distanceText(toMiles ? d / Self.kmPerMile : d * Self.kmPerMile)
+        }
+        let newPace = oldPace.map { text -> String in
+            guard let p = Self.parsePace(text), p > 0 else { return text }
+            let seconds = Int((toMiles ? p * Self.kmPerMile : p / Self.kmPerMile).rounded())
+            return "\(seconds / 60):" + String(format: "%02d", seconds % 60)
+        }
+        customPaceDist = newDist
+        customPacePace = newPace
+        unitConversion = UnitConversionBackup(fromUnit: old, toUnit: new, fromDist: oldDist, fromPace: oldPace,
+                                              toDist: newDist, toPace: newPace)
+    }
+
+    // MARK: Preset del pannello
+
+    /// Menù «Salvati» (salva le impostazioni attuali, richiama, elimina) oppure, durante il salvataggio, il campo del nome con ✓ e ✕.
+    @ViewBuilder private var presetControls: some View {
+        if savingPreset {
+            HStack(spacing: 6) {
+                TextField(t("preset_name"), text: $presetName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 150)
+                    .onSubmit { commitPreset() }
+                    .onChange(of: presetName) { _, new in if new.count > 30 { presetName = String(new.prefix(30)) } }
+                Button { commitPreset() } label: { Image(systemName: "checkmark") }
+                    .help(t("preset_confirm"))
+                    .disabled(presetName.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button { savingPreset = false } label: { Image(systemName: "xmark") }
+                    .help(t("preset_cancel"))
+            }
+        } else {
+            Menu {
+                Button(t("preset_save")) { presetName = activePresetName ?? ""; savingPreset = true }
+                if !runnerPresets.isEmpty {
+                    Divider()
+                    ForEach(runnerPresets) { preset in
+                        Button(preset.name) { applyPreset(preset) }
+                    }
+                    Divider()
+                    Menu(t("preset_delete")) {
+                        ForEach(runnerPresets) { preset in
+                            Button(preset.name, role: .destructive) {
+                                runnerPresets.removeAll { $0.id == preset.id }
+                                if activePresetName == preset.name { activePresetName = nil }
+                                RunnerPresetStore.save(runnerPresets)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Label(t("preset_menu"), systemImage: "bookmark")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help(t("preset_menu_help"))
+        }
+    }
+
+    /// Salva tutto il pannello con il nome scritto (stesso nome = sostituisce). I passi sono completati e le righe PacePro compattate.
+    private func commitPreset() {
+        let name = presetName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        let (dist, pace) = Self.compactedPaceRows(customPaceDist, customPacePace.map { Self.completedPace($0) })
+        let preset = RunnerPreset(name: name, sequence: customSequenceFields, showMid: customShowMid,
+                                  rolling: customRollingTime, showKm: customShowKm,
+                                  dist: dist, pace: pace, delay: customPaceDelay, unit: customPaceUnit)
+        if let i = runnerPresets.firstIndex(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            var replaced = preset; replaced.id = runnerPresets[i].id
+            runnerPresets[i] = replaced
+        } else {
+            runnerPresets.append(preset)
+        }
+        RunnerPresetStore.save(runnerPresets)
+        activePresetName = runnerPresets.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.name ?? name
+        savingPreset = false
+    }
+
+    /// Mette nel pannello i valori del preset (al posto di quelli attuali).
+    private func applyPreset(_ p: RunnerPreset) {
+        applyingPreset = true
+        activePresetName = p.name
+        func padded(_ a: [String], _ n: Int) -> [String] { Array((a + Array(repeating: "", count: n)).prefix(n)) }
+        customSequenceFields = padded(p.sequence, 6)
+        customPaceDist = padded(p.dist, 12)
+        customPacePace = padded(p.pace, 12)
+        customPaceDelay = p.delay
+        customPaceUnit = p.unit ?? "km"
+        customShowMid = p.showMid
+        customRollingTime = p.rolling
+        customShowKm = p.showKm
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { applyingPreset = false }
+    }
+
+    /// Completa tutti i passi tranne quello in cui si sta scrivendo (`editing`, indice 0…11).
+    private func completePaceFields(except editing: Int? = nil) {
+        var done = customPacePace
+        for j in done.indices where j != editing { done[j] = Self.completedPace(done[j]) }
+        if done != customPacePace { customPacePace = done }
+    }
+    /// Numero decimale (km, minuti di attesa): solo cifre e un unico separatore («,» o «.»); se non è ammesso resta il valore precedente.
+    private static func cleanDecimal(_ text: String, previous: String, maxLength: Int) -> String {
+        let filtered = text.filter { $0.isNumber || $0 == "," || $0 == "." }
+        if filtered.count <= maxLength, filtered.filter({ $0 == "," || $0 == "." }).count <= 1 { return filtered }
+        return previous == text ? "" : String(previous.prefix(maxLength))
     }
     /// Frazioni valide (distanza e passo entrambi compilati e maggiori di zero), nell'ordine inserito.
     private func paceSegments() -> [PaceSegment] {
@@ -800,39 +1317,85 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         .buttonStyle(.plain)
         .help(t("tooltip_custom_sequence"))
         .popover(isPresented: $showSequenceEditor, arrowEdge: .bottom) { sequenceEditor }
+        // Qui e non nel pannello: deve funzionare anche a pannello chiuso (l'unità si cambia anche da Impostazioni).
+        .onChange(of: settings.runningUnit) { _, _ in
+            appliedRunningUnit = settings.resolvedRunningUnit
+            setPaceUnit(settings.resolvedRunningUnit)
+        }
+        .onChange(of: showSequenceEditor) { _, open in
+            // All'apertura del pannello: se l'unità delle Impostazioni è cambiata da quando l'abbiamo applicata, ora si applica (e converte i valori).
+            guard open, settings.resolvedRunningUnit != appliedRunningUnit else { return }
+            appliedRunningUnit = settings.resolvedRunningUnit
+            setPaceUnit(settings.resolvedRunningUnit)
+        }
+    }
+
+    /// Riga con etichetta a sinistra e interruttore a destra (misura delle Impostazioni), allineato ai pulsanti del pannello.
+    private func paneSwitchRow(_ title: String, isOn: Binding<Bool>, help: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer(minLength: 8)
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)   // stessa misura degli interruttori delle Impostazioni (misurata sullo screenshot: .small risultava ancora ~20 % più grande)
+        }
+        .help(help)
     }
 
     private var sequenceEditor: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(t("custom_sequence_title")).font(.headline)
+            HStack {
+                Text(activePresetName.map { t("custom_sequence_title") + " – " + $0 } ?? t("custom_sequence_title"))
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 8)
+                presetControls
+            }
+            Text(t("custom_blocks_title")).font(.headline).padding(.top, 6)
             Text(t("custom_sequence_hint")).font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
+            // Sei campi stretti (38 pt, 2 pt di spazio, tre cifre) e il pulsante di azzeramento sulla stessa riga: il pannello è largo 450 pt.
+            HStack(spacing: 2) {
                 ForEach(0..<6, id: \.self) { i in
                     TextField("", text: $customSequenceFields[i])
                         .multilineTextAlignment(.center)
+                        .font(.caption.monospacedDigit()).controlSize(.small)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 46)
+                        .frame(width: 38)
                 }
-            }
-            HStack {
-                Spacer()
+                Spacer(minLength: 8)
                 Button(t("custom_sequence_reset")) { customSequenceFields = Array(repeating: "", count: 6) }
+                    .fixedSize()
                     .disabled(customSequence.isEmpty && customSequenceFields.allSatisfy { $0.isEmpty })
             }
-            Divider()
-            Toggle(t("custom_rolling_time"), isOn: $customRollingTime)
-                .toggleStyle(.switch)
-                .help(t("custom_rolling_time_help"))
-            Toggle(t("custom_show_mid"), isOn: $customShowMid)
-                .toggleStyle(.switch)
-                .help(t("custom_show_mid_help"))
-            Divider()
-            Text(t("custom_pace_title")).font(.headline)
-            Toggle(t("custom_pace_show_km"), isOn: $customShowKm)
-                .toggleStyle(.switch)
-                .help(t("custom_pace_show_km_help"))
-            Text(t("custom_pace_hint")).font(.caption).foregroundStyle(.secondary)
+            // «Brano a metà» vale per la numerazione e per PacePro: stessa distanza (13 pt) dai sei campi e dal titolo PacePro,
+            // senza allungare il pannello (prima 10 + 16 = 26 pt, ora 13 + 13).
+            paneSwitchRow(t("custom_show_mid"), isOn: $customShowMid, help: t("custom_show_mid_help"))
+                .padding(.top, 3)
+            // Sezione PacePro: il tempo progressivo è legato a PacePro (si accende con lui) ma si può usare anche da solo.
+            ZStack {
+              HStack(alignment: .center, spacing: 8) {
+                Text(t("custom_pace_title")).font(.headline)
+                Spacer(minLength: 4)
+                Picker("", selection: Binding(get: { customPaceUnit }, set: { setPaceUnit($0) })) {
+                    Text("km").tag("km")
+                    Text("mi").tag("mi")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()   // senza larghezza fissa: il controllo si ferma al bordo destro, come gli interruttori
+                .help(t("custom_pace_unit_help"))
+              }
+              paceCalculator   // al centro esatto del pannello, indipendente dalla larghezza del titolo e del selettore
+            }
+            .padding(.top, 3)
+            paneSwitchRow(t("custom_rolling_time"), isOn: $customRollingTime, help: t("custom_rolling_time_help"))
+            paneSwitchRow(t(customPaceUnit == "mi" ? "custom_pace_show_mi" : "custom_pace_show_km"), isOn: $customShowKm,
+                          help: t(customPaceUnit == "mi" ? "custom_pace_show_mi_help" : "custom_pace_show_km_help"))
+            Text(t(customPaceUnit == "mi" ? "custom_pace_hint_mi" : "custom_pace_hint")).font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             // 4 righe da 3 frazioni: il tasto Tab segue l'ordine di lettura (1 distanza, 1 passo, 2 distanza, 2 passo, 3…), come l'ordine delle
             // frazioni; con due colonne affiancate il cursore saltava da una colonna all'altra.
@@ -846,7 +1409,9 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             HStack(spacing: 6) {
                 Text(t("custom_pace_delay")).font(.caption)
                 TextField("0", text: $customPaceDelay)
+                    .focused($focusedPace, equals: 200)
                     .multilineTextAlignment(.center)
+                    .font(.caption.monospacedDigit()).controlSize(.small)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 46)
                 Spacer()
@@ -854,29 +1419,84 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                     customPaceDist = Array(repeating: "", count: 12)
                     customPacePace = Array(repeating: "", count: 12)
                     customPaceDelay = "0"
+                    clearCalc()
                 }
                 .disabled(paceSegments().isEmpty && customPaceDelay == "0"
+                          && calcDist.isEmpty && calcTime.isEmpty && calcPace.isEmpty
                           && customPaceDist.allSatisfy { $0.isEmpty } && customPacePace.allSatisfy { $0.isEmpty })
             }
-            // Altezza fissa (due righe, anche vuota): se il pannello cambiasse altezza mentre si scrive, macOS lo riposizionerebbe
-            // (la finestrella saltava sotto il pulsante).
+            // Altezza fissa (una riga, anche vuota): se il pannello cambiasse altezza mentre si scrive, macOS lo riposizionerebbe
+            // (la finestrella saltava sotto il pulsante). Il testo non va a capo: se è troppo lungo si riduce un poco.
             Text(paceSummary().isEmpty ? " " : paceSummary())
                 .font(.caption).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .topLeading)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity, minHeight: 15, maxHeight: 15, alignment: .topLeading)
         }
         .padding(14)
         .frame(width: 450)
-        .onChange(of: customPaceDist) { _, new in
-            let cleaned = new.map { String($0.filter { $0.isNumber || $0 == "," || $0 == "." }.prefix(6)) }
-            if cleaned != new { customPaceDist = cleaned }
+        .onChange(of: customPaceDist) { old, new in
+            let cleaned = new.indices.map { Self.cleanDecimal(new[$0], previous: $0 < old.count ? old[$0] : "", maxLength: 6) }
+            if cleaned != new { customPaceDist = cleaned; return }
+            // Primo dato inserito in PacePro (tutti i campi vuoti): «Km per brano» si accende da solo (e con lui il tempo progressivo).
+            // Se poi lo spegni a mano, non viene riacceso finché non si svuota tutto e si riparte.
+            if applyingPreset { completePaceFields(except: nil); return }
+            if old.allSatisfy(\.isEmpty), customPacePace.allSatisfy(\.isEmpty), new.contains(where: { !$0.isEmpty }) { customShowKm = true }
+            // Primo valore della colonna scritto in un campo che non è il primo: sale nel campo 1 e il cursore lo segue.
+            if old.allSatisfy(\.isEmpty), let e = new.firstIndex(where: { !$0.isEmpty }), e != 0 {
+                var moved = new; moved[0] = new[e]; moved[e] = ""
+                customPaceDist = moved
+                focusFirstPaceField(placeholder: customPaceUnit)
+            }
+            completePaceFields(except: pendingPaceIndex)
         }
-        .onChange(of: customPacePace) { _, new in
-            let cleaned = new.map { String($0.filter { $0.isNumber || $0 == ":" }.prefix(5)) }
-            if cleaned != new { customPacePace = cleaned }
+        .onChange(of: customPacePace) { old, new in
+            let cleaned = new.indices.map { Self.cleanPace(new[$0], previous: $0 < old.count ? old[$0] : "") }
+            if cleaned != new { customPacePace = cleaned; return }
+            if old.allSatisfy(\.isEmpty), customPaceDist.allSatisfy(\.isEmpty), new.contains(where: { !$0.isEmpty }) { customShowKm = true }
+            if old.allSatisfy(\.isEmpty), let e = new.firstIndex(where: { !$0.isEmpty }), e != 0 {
+                var moved = new; moved[0] = new[e]; moved[e] = ""
+                customPacePace = moved
+                focusFirstPaceField(placeholder: "m:ss")
+                return
+            }
+            // Il campo modificato resta com'è; gli altri passi scritti a metà vengono completati subito.
+            let edited = new.indices.first { $0 < old.count && new[$0] != old[$0] }
+            if let edited { completePaceFields(except: edited) }
         }
-        .onChange(of: customPaceDelay) { _, new in
-            let cleaned = String(new.filter { $0.isNumber || $0 == "," || $0 == "." }.prefix(4))
+        .onChange(of: customPaceDelay) { old, new in
+            let cleaned = Self.cleanDecimal(new, previous: old, maxLength: 4)
             if cleaned != new { customPaceDelay = cleaned }
+            completePaceFields(except: pendingPaceIndex)
+        }
+        .onChange(of: customShowKm) { _, on in
+            // Attivando PacePro («Km per brano») il tempo progressivo si accende da solo; poi si può spegnere a mano.
+            if on { customRollingTime = true }
+        }
+        .onChange(of: calcDist) { old, new in
+            let c = Self.cleanDecimal(new, previous: old, maxLength: 6)
+            if c != new { calcDist = c } else { calcEdited(0) }
+        }
+        .onChange(of: calcTime) { old, new in
+            let c = Self.cleanPace(new, previous: old)
+            if c != new { calcTime = c } else { calcEdited(1) }
+        }
+        .onChange(of: calcPace) { old, new in
+            let c = Self.cleanPace(new, previous: old)
+            if c != new { calcPace = c } else { calcEdited(2) }
+        }
+        .onChange(of: focusedPace) { _, new in
+            // Appena il cursore cambia campo (Tab, clic) i passi scritti a metà vengono completati.
+            completePaceFields(except: new.flatMap { $0 < 100 ? $0 : nil })
+        }
+        .onAppear {
+            runnerPresets = RunnerPresetStore.load()
+            // Un preset eliminato o di un altro utente non resta nel titolo.
+            if let n = activePresetName, !runnerPresets.contains(where: { $0.name == n }) { activePresetName = nil }
+        }
+        .onDisappear {
+            completePaceFields()
+            compactPaceRows()
         }
         .onChange(of: customSequenceFields) { _, new in
             // Solo cifre, al massimo tre.
@@ -889,12 +1509,18 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     private func paceCell(_ i: Int) -> some View {
         HStack(spacing: 4) {
             Text("\(i + 1)").font(.caption).foregroundStyle(.secondary).frame(width: 16, alignment: .trailing)
-            TextField("km", text: $customPaceDist[i])
+            TextField(customPaceUnit, text: $customPaceDist[i])
+                .accessibilityIdentifier("pace-km-\(i)")
+                .focused($focusedPace, equals: 100 + i)
                 .multilineTextAlignment(.center)
+                .font(.caption.monospacedDigit()).controlSize(.small)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 56)
             TextField("m:ss", text: $customPacePace[i])
+                .accessibilityIdentifier("pace-time-\(i)")
                 .multilineTextAlignment(.center)
+                .font(.caption.monospacedDigit()).controlSize(.small)
+                .focused($focusedPace, equals: i)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 50)
         }
@@ -907,7 +1533,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         let km = segs.reduce(0.0) { $0 + $1.dist }
         let sec = segs.reduce(0.0) { $0 + $1.dist * $1.sec }
         let playlist = (customPlaylist?.entries ?? []).reduce(0.0) { $0 + max(0, $1.track.duration) }
-        var text = t("custom_pace_summary", Self.kmText(km), formatDuration(sec), playlist > 0 ? formatDuration(playlist) : "0:00")
+        var text = t(customPaceUnit == "mi" ? "custom_pace_summary_mi" : "custom_pace_summary", Self.kmText(km), formatDuration(sec), playlist > 0 ? formatDuration(playlist) : "0:00")
         let diff = sec + paceDelaySeconds - playlist
         if diff >= 1 { text += t("custom_pace_short", formatDuration(diff)) }
         else if diff <= -1 { text += t("custom_pace_longer", formatDuration(-diff)) }
@@ -2742,12 +3368,16 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             }
         }
         let numbering = numberingBuilt
-        // Tempi: inizio di ogni brano (somma delle durate dei precedenti) e brano in cui cade la metà della durata totale.
+        // Tempi: inizio di ogni brano (somma delle durate dei precedenti) e brano in cui cade la metà (della playlist o, con PacePro, della gara).
         var startsBuilt: [UUID: TimeInterval] = [:]
         var midBuilt: UUID?
         do {
             let total = config.entries.reduce(0.0) { $0 + max(0, $1.track.duration) }
-            let half = total / 2
+            // Con PacePro attivo («Km per brano» e almeno una frazione valida) la metà è quella della gara, non quella della playlist:
+            // ritardo iniziale + metà del tempo di gara (gara 5 h, ritardo 0 → 2 h 30 min); altrimenti metà della durata totale.
+            let pacing = paceSegments()
+            let raceSeconds = pacing.reduce(0.0) { $0 + $1.dist * $1.sec }
+            let half = customShowKm && !pacing.isEmpty ? paceDelaySeconds + raceSeconds / 2 : total / 2
             var cumulative = 0.0
             for entry in config.entries {
                 startsBuilt[entry.id] = cumulative
@@ -2778,7 +3408,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                     let t0 = starts[i] - delay
                     var text = ""
                     if t0 < 0 { text = "—" }
-                    else if let km = Self.raceKm(at: t0, segs) { text = Self.kmText(km) + (compactPane ? "" : " km") }
+                    else if let km = Self.raceKm(at: t0, segs) { text = Self.kmText(km) + (compactPane ? "" : " " + customPaceUnit) }
                     paceBuilt[e.id] = PaceRowInfo(start: text)
                 }
                 var j = 0
@@ -2789,7 +3419,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                         while j < all.count, ends[j] <= at { j += 1 }
                         if j < all.count, starts[j] <= at {
                             paceBuilt[all[j].id]?.crossings.append(k)
-                            let line = t("custom_pace_cross_help", k, formatDuration(tk))
+                            let line = t(customPaceUnit == "mi" ? "custom_pace_cross_help_mi" : "custom_pace_cross_help", k, formatDuration(tk))
                             let old = paceBuilt[all[j].id]?.help ?? ""
                             paceBuilt[all[j].id]?.help = old.isEmpty ? line : old + "\n" + line
                         }
@@ -2823,7 +3453,12 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                 crossings: pi?.crossings ?? [],
                 finish: pi?.finish ?? false,
                 isMid: customShowMid && entry.id == midID,
-                help: pi?.help ?? "")
+                help: pi?.help ?? "",
+                startSeconds: startTimes[entry.id] ?? 0,
+                liveSegments: (customShowKm ? paceSegments() : []).flatMap { [$0.dist, $0.sec] },
+                liveDelay: paceDelaySeconds,
+                kmSuffix: compactPane ? "" : " " + customPaceUnit,
+                unit: customPaceUnit)
         }
         return List {
             GlassInsetRow(edge: .top)
@@ -2868,7 +3503,8 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                         slotArtist: slotArtist, slotAlbum: slotAlbum, slotTrack: slotTrack)
                     trackRow(entry.track, selectionOnLeft: false, artistFirst: artistFirst, repeats: repeats,
                              durationText: customRollingTime ? rollingText(startTimes[entry.id] ?? 0) : nil,
-                             paceInfo: paceInfo[entry.id]) {
+                             paceInfo: paceInfo[entry.id],
+                             rowSelected: customPlaylistSelection.contains(entry.id)) {
                         Button {
                             config.onRemove(entry.id)
                         } label: {
@@ -2918,6 +3554,14 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
         .scrollContentBackground(.hidden)
         .onChange(of: playingInfo, initial: true) { _, new in CustomPlayInfoStore.shared.info = new }
         .onDisappear { CustomPlayInfoStore.shared.info = nil }
+        // Come per i brani di una playlist o di un album aperti: caricando la Custom si richiedono le copertine mancanti (quelle che
+        // vengono dalla cache di Musica; quelle nel file si leggono da sole). Prima comparivano solo suonando il brano.
+        .task(id: "\(config.entries.count)|\(config.entries.first.map { String(describing: $0.track.id) } ?? "")|\(config.entries.last.map { String(describing: $0.track.id) } ?? "")|\(onlyWithoutCover)") {
+            guard settings.autoLoadAppleArtwork, !onlyWithoutCover, let request = onRequestArtwork, !queue.isEmpty else { return }
+            try? await Task.sleep(nanoseconds: 500_000_000)   // la lista si disegna prima, poi arrivano le copertine
+            guard !Task.isCancelled else { return }
+            request(queue, false)
+        }
     }
 
     /// Tempo progressivo come «m:ss» o «h:mm:ss»; zero = «0:00» (il primo brano parte da 0).
@@ -3012,7 +3656,7 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
     @ViewBuilder
     private func trackRow<Trailing: View>(_ track: Track, number: String? = nil, insideAlbum: Bool = false, selectionOnLeft: Bool = true,
                                           artistFirst: Bool = false, repeats: CustomRepeats? = nil, durationText: String? = nil,
-                                          paceInfo: PaceRowInfo? = nil,
+                                          paceInfo: PaceRowInfo? = nil, rowSelected: Bool = false,
                                           @ViewBuilder trailing: () -> Trailing) -> some View {
         HStack(spacing: tightCustom ? 6 : 10) {
             if let number {
@@ -3141,17 +3785,19 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
                                 .frame(height: 16)   // più grande ma con l'altezza di «km N»: la riga non cresce
                         }
                         if let first = paceInfo.crossings.first, let last = paceInfo.crossings.last {
-                            Text(first == last ? "km \(first)" : "km \(first)–\(last)")
+                            Text(first == last ? "\(customPaceUnit) \(first)" : "\(customPaceUnit) \(first)–\(last)")
                                 .font(.caption.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(Color.teal)
+                                // Tema chiaro: turchese più scuro e sfondo più pieno (il turchese di sistema si leggeva poco); tema scuro invariato.
+                                // Riga selezionata (fondo arancione): testo bianco su capsule bianca trasparente, altrimenti il turchese non si legge.
+                                .foregroundStyle(rowSelected ? Color.primary : (colorScheme == .dark ? Color.teal : Color(red: 0.0, green: 0.40, blue: 0.46)))
                                 .lineLimit(1).minimumScaleFactor(0.75)
                                 .padding(.horizontal, tightCustom ? 4 : 6).frame(height: 16)
-                                .background(Color.teal.opacity(0.18), in: Capsule())
+                                .background(rowSelected ? Color.primary.opacity(0.2) : Color.teal.opacity(colorScheme == .dark ? 0.18 : 0.28), in: Capsule())
                         }
                     }
                     .frame(width: tightCustom ? 58 : 66, alignment: .trailing)
                     Text(paceInfo.start)
-                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        .font(.caption.monospacedDigit()).foregroundStyle(rowSelected ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.secondary))
                         .lineLimit(1)
                         .frame(width: tightCustom ? 30 : 46, alignment: .trailing)
                 }
@@ -3160,8 +3806,15 @@ struct CatalogBrowser<Track: CatalogTrack>: View {
             if let durationText {
                 // «Tempo progressivo» (Custom Playlist): al posto della durata, l'istante in cui parte il brano.
                 Text(durationText)
-                    .font(.caption.monospacedDigit()).foregroundStyle(settings.selectionSolidColor)
-                    .frame(minWidth: tightCustom ? 32 : 36, alignment: .trailing)
+                    .font(.caption.monospacedDigit()).foregroundStyle(rowSelected ? Color.primary : settings.selectionSolidColor)   // sulla riga selezionata il fondo ha il colore scelto dall'utente: serve un colore a contrasto
+                    // Larghezza fissa, sufficiente per «h:mm:ss»: al passaggio dell'ora («59:59» → «1:00:32») la colonna non si allarga
+                    // e le colonne a sinistra (km, «km N», ripetizioni) non si spostano.
+                    // Oltre le 10 ore («hh:mm:ss», caso limite): si stringe la spaziatura tra i caratteri invece di andare a capo o allargare;
+                    // se non basta (lista stretta), il carattere si riduce un poco.
+                    .tracking(durationText.count > 7 ? -0.7 : 0)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .frame(width: tightCustom ? 40 : 44, alignment: .trailing)
             } else {
                 durationLabel(track)
             }
@@ -4715,5 +5368,33 @@ enum PerfLag {
                 AppLog.debug("[prestazioni] Interfaccia: \(what) — libera dopo \(String(format: "%.2f", lag)) s; memoria \(memory) → \(ProcessMemory.residentMB) MB; thread \(ProcessMemory.threadCount)")
             }
         }
+    }
+}
+
+
+/// Settaggio con nome del pannello Runners della Custom Playlist (sequenza, interruttori, 12 frazioni PacePro, ritardo).
+struct RunnerPreset: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var name: String
+    var sequence: [String]
+    var showMid: Bool
+    var rolling: Bool
+    var showKm: Bool
+    var dist: [String]
+    var pace: [String]
+    var delay: String
+    /// «km» o «mi»; assente nei preset salvati prima delle miglia (= km).
+    var unit: String? = nil
+}
+
+/// Lettura e scrittura dei preset nelle impostazioni dell'utente attivo (`ProfileDefaults`).
+enum RunnerPresetStore {
+    static func load() -> [RunnerPreset] {
+        guard let data = ProfileDefaults.shared.data(forKey: AppSettings.runnerPresetsKey),
+              let list = try? JSONDecoder().decode([RunnerPreset].self, from: data) else { return [] }
+        return list
+    }
+    static func save(_ list: [RunnerPreset]) {
+        ProfileDefaults.shared.set(try? JSONEncoder().encode(list), forKey: AppSettings.runnerPresetsKey)
     }
 }

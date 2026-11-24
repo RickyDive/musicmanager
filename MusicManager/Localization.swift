@@ -274,6 +274,14 @@ private enum L {
             .it: "Ultimo controllo %@ giorni fa: ricontrolla per sapere se ci sono aggiornamenti.",
             .en: "Last checked %@ days ago: check again to see if there are updates."
         ],
+        "alert_installed_update_title": [
+            .it: "Aggiornamento installato",
+            .en: "Update installed"
+        ],
+        "alert_installed_update_message": [
+            .it: "Music Manager ha rilevato che il software di «%@» è stato aggiornato dalla versione %@ alla %@ (fuori da Music Manager, ad esempio con Garmin Express).",
+            .en: "Music Manager noticed that the software of “%@” was updated from version %@ to %@ (outside Music Manager, for example with Garmin Express)."
+        ],
         "alert_maps_changed_title": [
             .it: "Mappe cambiate sul dispositivo",
             .en: "Maps changed on the device"
@@ -304,6 +312,9 @@ private enum L {
         ],
         "update_notes_more": [.it: "Altre versioni…", .en: "More…"],
         "update_notes_less": [.it: "Mostra meno", .en: "Show less"],
+        "update_notes_none": [
+            .it: "Garmin non ha pubblicato note per la versione %@.", .en: "Garmin has not published notes for version %@."
+        ],
         "tooltip_installed_whats_new": [
             .it: "Novità della versione %@ (da Garmin):", .en: "What's new in version %@ (from Garmin):"
         ],
@@ -606,7 +617,7 @@ private enum L {
             .it: "Connetti il dispositivo e leggi la sua musica", .en: "Connect the device and read its music"
         ],
         "tooltip_disconnect_device": [
-            .it: "Disconnetti il dispositivo (resta collegato al Mac)", .en: "Disconnect the device (it stays plugged in)"
+            .it: "Disconnetti il dispositivo da Music Manager. Non lo scollega dal Mac: per farlo usa l'espulsione del dispositivo, poi togli il cavo.", .en: "Disconnect the device from Music Manager. It does not unplug it from the Mac: use the device's eject function, then remove the cable."
         ],
         "tooltip_storage_menu": [
             .it: "Memoria del dispositivo da gestire (interna o scheda SD)", .en: "Device storage to manage (internal or SD card)"
@@ -709,8 +720,8 @@ private enum L {
         ],
         "alert_device_update_title": [ .it: "Aggiornamento disponibile", .en: "Update available" ],
         "alert_device_update_footer": [
-            .it: "Per installarlo usa Garmin Express: questa app non installa aggiornamenti.",
-            .en: "Install it with Garmin Express: this app does not install updates."
+            .it: "Per installarlo usa Garmin Express: questa app non installa aggiornamenti. Se hai già aggiornato alla nuova versione, puoi ignorare questo messaggio o collegare il Garmin per allineare le informazioni.",
+            .en: "Install it with Garmin Express: this app does not install updates. If you have already updated to the new version, you can ignore this message or connect the Garmin to align the information."
         ],
         "update_sheet_hint": [
             .it: "Stato del software dei dispositivi registrati. Passa sul pallino «Upgrade Available» per vedere le novità.",
@@ -976,24 +987,40 @@ private enum L {
             .en: "Background color for selected rows on Music's Playlists, Artists, Albums and Songs tabs."
         ],
         "tooltip_custom_title_first": [.it: "Riga principale: titolo del brano", .en: "Main line: song title"],
-        "tooltip_custom_sequence": [.it: "Sequenza dei blocchi e tempi (solo visivo)", .en: "Block sequence and times (visual only)"],
-        "custom_sequence_title": [.it: "Sequenza e tempi", .en: "Sequence and times"],
+        "label_product_code": [.it: "Cod. Prodotto", .en: "Product Code"],   // come sul sito Garmin («Codice Prodotto»)
+        "tooltip_custom_sequence": [.it: "Utilità Running", .en: "Running Tool"],
+        "custom_sequence_title": [.it: "Utilità Running", .en: "Running Tool"],
         "custom_rolling_time": [.it: "Tempo progressivo", .en: "Rolling time"],
         "custom_rolling_time_help": [.it: "Al posto della durata, il tempo a cui parte ogni brano (il primo da 0:00)", .en: "Instead of the song length, the time at which each song starts (the first at 0:00)"],
         "custom_show_mid": [.it: "Brano a metà", .en: "Show mid song"],
         "custom_mid_badge": [.it: "Metà", .en: "Mid"],
-        "custom_show_mid_help": [.it: "Evidenzia il brano in cui cade la metà della durata totale della playlist", .en: "Highlights the song where the halfway point of the whole playlist falls"],
+        "custom_show_mid_help": [.it: "Evidenzia il brano in cui cade la metà della durata totale della playlist; con PacePro attivo, la metà del tempo di gara (più il ritardo iniziale)", .en: "Highlights the song where the halfway point of the whole playlist falls; with PacePro on, the halfway point of the race time (plus the start delay)"],
         "custom_sequence_hint": [
             .it: "Fino a 6 valori che si ripetono: il numero dei brani riparte da 1 a ogni blocco. Esempio: 10 e 1 → 1…10, 1, 1…10, 1… Non cambia l'ordine della playlist. Campi vuoti: numerazione 1…N.",
             .en: "Up to 6 values that repeat: the song number restarts at 1 in each block. Example: 10 and 1 → 1…10, 1, 1…10, 1… The playlist order does not change. Empty fields: plain 1…N numbering."
         ],
-        "custom_pace_title": [.it: "PacePro (passo gara)", .en: "PacePro (race pace)"],
+        "custom_pace_title": [.it: "PacePro", .en: "PacePro"],
         "custom_pace_show_km": [.it: "Km per brano", .en: "Km per song"],
         "custom_pace_show_km_help": [.it: "Mostra il km a cui parte ogni brano, il chilometro che superi in ciascun brano e il brano del traguardo", .en: "Shows the km at which each song starts, the kilometre you pass during each song and the song of the finish"],
         "custom_pace_hint": [
             .it: "Frazioni del PacePro: distanza (km) e passo (m:ss al km), nell'ordine della gara. Stime: il passo reale varia.",
             .en: "PacePro splits: distance (km) and pace (m:ss per km), in race order. Estimates: your real pace will vary."
         ],
+        "custom_pace_show_mi": [.it: "Miglia per brano", .en: "Miles per song"],
+        "custom_pace_show_mi_help": [.it: "Mostra il miglio a cui parte ogni brano, il miglio che superi in ciascun brano e il brano del traguardo", .en: "Shows the mile at which each song starts, the mile you pass during each song and the song of the finish"],
+        "custom_pace_hint_mi": [
+            .it: "Frazioni del PacePro: distanza (miglia) e passo (m:ss al miglio), nell'ordine della gara. Stime: il passo reale varia.",
+            .en: "PacePro splits: distance (miles) and pace (m:ss per mile), in race order. Estimates: your real pace will vary."
+        ],
+        "custom_pace_unit_help": [.it: "Unità di misura delle frazioni: chilometri o miglia (cambia solo le etichette: i numeri inseriti restano)", .en: "Unit of the splits: kilometres or miles (only the labels change: the numbers you typed stay)"],
+        "custom_pace_summary_mi": [.it: "Gara %@ mi in %@ · playlist %@", .en: "Race %@ mi in %@ · playlist %@"],
+        "custom_pace_cross_help_mi": [.it: "Al miglio %d (%@ di gara) sei in questo brano", .en: "At mile %d (%@ into the race) you are in this song"],
+        "calc_title": [.it: "Calcolatore passo", .en: "Pace calculator"],
+        "calc_help": [
+            .it: "Calcolatrice: scrivi due valori tra distanza, tempo (h:mm) e passo (m:ss) e il terzo viene calcolato; se li hai scritti tutti e tre, si ricalcola quello modificato meno di recente.",
+            .en: "Calculator: type two of distance, time (h:mm) and pace (m:ss) and the third is worked out; if all three are filled, the one edited least recently is recalculated."
+        ],
+        "calc_copy_help": [.it: "Copia distanza e passo nel campo 1 di PacePro", .en: "Copy distance and pace into PacePro field 1"],
         "custom_pace_delay": [.it: "Ritardo iniziale (min)", .en: "Start delay (min)"],
         "custom_pace_clear": [.it: "Azzera PacePro", .en: "Clear PacePro"],
         "custom_pace_summary": [.it: "Gara %@ km in %@ · playlist %@", .en: "Race %@ km in %@ · playlist %@"],
@@ -1001,7 +1028,16 @@ private enum L {
         "custom_pace_longer": [.it: " · avanzano %@", .en: " · %@ to spare"],
         "custom_pace_missing_header": [.it: "mancano %@ al traguardo", .en: "%@ short of the finish"],
         "custom_pace_cross_help": [.it: "Al km %d (%@ di gara) sei in questo brano", .en: "At km %d (%@ into the race) you are in this song"],
+        "custom_live_forecast_help": [.it: "Tempo e distanza avanzano mentre il brano suona: sono una previsione secondo il PacePro, non una misura. Valgono se la Custom suona dall'inizio, in ordine e senza salti.", .en: "Time and distance advance while the song plays: they are a forecast based on PacePro, not a measurement. They hold if the Custom plays from the start, in order, with no skipping."],
         "custom_pace_finish_help": [.it: "Qui tagli il traguardo (%@)", .en: "You cross the finish line here (%@)"],
+        "preset_menu": [.it: "Salvati", .en: "Saved"],
+        "preset_menu_help": [.it: "Salva e richiama i settaggi di questo pannello (sequenza, tempi, PacePro)", .en: "Save and recall this panel's settings (sequence, times, PacePro)"],
+        "preset_save": [.it: "Salva le impostazioni attuali…", .en: "Save current settings…"],
+        "preset_name": [.it: "Nome", .en: "Name"],
+        "preset_delete": [.it: "Elimina", .en: "Delete"],
+        "preset_confirm": [.it: "Salva", .en: "Save"],
+        "preset_cancel": [.it: "Annulla", .en: "Cancel"],
+        "custom_blocks_title": [.it: "Numerazione a blocchi", .en: "Block numbering"],
         "custom_sequence_reset": [.it: "Numerazione sequenziale", .en: "Sequential numbering"],
         "tooltip_custom_artist_first": [.it: "Riga principale: artista (per riconoscere gli artisti ripetuti)", .en: "Main line: artist (to spot repeated artists)"],
         "settings_album_order_alpha": [.it: "Alfabetico", .en: "Alphabetical"],
@@ -1040,7 +1076,7 @@ private enum L {
             .en: "Off: switches, main buttons and active icons follow the System color. On: they use the color chosen for selected rows."
         ],
         "settings_lookup_artwork": [
-            .it: "Abilita Fix Artwork (copertine online)", .en: "Enable Fix Artwork (online artwork)"
+            .it: "Fix Artwork (ricerca online)", .en: "Fix Artwork (Online search)"
         ],
         "settings_lookup_artwork_hint": [
             .it: "Aggiunge «Fix Artwork» al menu del click destro sui brani: cerca una copertina online, te la mostra accanto all'originale e la usa solo se la confermi. Funziona su file AAC/M4A; viene scritta in una copia al momento dell'invio all'orologio, mai nel file originale in Music.",
@@ -1662,6 +1698,28 @@ private enum L {
             .it: "Hai collegato per la prima volta «%@». Vuoi dargli un nickname per riconoscerlo la prossima volta?",
             .en: "You have connected “%@” for the first time. Would you like to give it a nickname so you can recognize it next time?"
         ],
+        "first_connection_storage": [
+            .it: "%@ · liberi %@", .en: "%@ · %@ free"
+        ],
+        "first_connection_maps_update": [
+            .it: "Una o più mappe installate presentano degli aggiornamenti disponibili.",
+            .en: "One or more installed maps have updates available."
+        ],
+        "first_connection_no_install": [
+            .it: "Music Manager non installa aggiornamenti: per software e mappe usa Garmin Express.",
+            .en: "Music Manager does not install updates: use Garmin Express for software and maps."
+        ],
+        "first_connection_consent": [
+            .it: "Se attivo, l'app chiede a Garmin se esistono aggiornamenti di software e mappe (come Garmin Express) e all'apertura controlla i dispositivi registrati. Viene inviato a Garmin il contenuto di GarminDevice.xml (modello, numero di unità e codici di sblocco). Puoi cambiare scelta in qualsiasi momento in Impostazioni. Se resta spento, nessun dato viene inviato.",
+            .en: "When on, the app asks Garmin whether software and maps updates exist (like Garmin Express) and checks your registered devices at launch. The contents of GarminDevice.xml (model, unit number and unlock codes) are sent to Garmin. You can change this at any time in Settings. If left off, nothing is sent."
+        ],
+        "nickname_skipped_title": [
+            .it: "Dispositivo registrato", .en: "Device registered"
+        ],
+        "nickname_skipped_message": [
+            .it: "Non hai assegnato un nickname, ma «%@» è comunque registrato. Potrai dargliene uno in qualsiasi momento in Impostazioni → Avanzate → Devices.",
+            .en: "You did not assign a nickname, but “%@” is registered anyway. You can give it one at any time in Settings → Advanced → Devices."
+        ],
         "nickname_prompt_placeholder": [
             .it: "Nickname", .en: "Nickname"
         ],
@@ -1684,6 +1742,16 @@ private enum L {
         ],
         "device_col_software": [
             .it: "Software Version", .en: "Software Version"
+        ],
+        "alert_forget_device_title": [
+            .it: "Rimuovere il dispositivo?", .en: "Remove the device?"
+        ],
+        "alert_forget_device_message": [
+            .it: "Nickname e dati di «%@» vengono cancellati dall'elenco. Al prossimo collegamento verrà riproposto il nickname. Gli altri dispositivi non vengono toccati.",
+            .en: "The nickname and data of “%@” will be deleted from the list. The nickname will be asked again the next time you connect it. Other devices are not touched."
+        ],
+        "device_remove_help": [
+            .it: "Rimuovi il dispositivo selezionato", .en: "Remove the selected device"
         ],
         "button_forget_devices": [
             .it: "Forget Devices", .en: "Forget Devices"
@@ -1869,6 +1937,14 @@ private enum L {
         "settings_tab_advanced": [
             .it: "Avanzate", .en: "Advanced"
         ],
+        "settings_running_unit": [.it: "Unità Running", .en: "Running unit"],
+        "settings_running_unit_hint": [
+            .it: "Unità di misura con cui parte il pannello Utilità Running (frazioni PacePro, marker e km nel player). Automatica segue la zona di macOS (USA e Regno Unito: miglia); si può sempre cambiare dal pannello.",
+            .en: "Unit the Running Tool panel starts with (PacePro splits, markers and distance in the player). Automatic follows the macOS region (US and UK: miles); it can always be changed from the panel."
+        ],
+        "settings_running_unit_auto": [.it: "Automatica (zona di macOS)", .en: "Automatic (macOS region)"],
+        "settings_running_unit_km": [.it: "Chilometri", .en: "Kilometres"],
+        "settings_running_unit_mi": [.it: "Miglia", .en: "Miles"],
         "settings_playlist_types": [
             .it: "Playlist di Music", .en: "Music playlists"
         ],
@@ -1926,16 +2002,24 @@ private enum L {
             .en: "When sending tracks without artwork (local, shared or external-drive library) to the watch or the Custom Playlist, asks whether to search it online and opens the Artwork panel. Requires the online artwork search to be on."
         ],
         "settings_artwork_store": [
-            .it: "Paese dello store per le ricerche online",
-            .en: "Store country for online searches"
+            .it: "Paese dello store",
+            .en: "Store country"
         ],
         "settings_artwork_store_auto": [
             .it: "Automatico (%@)",
             .en: "Automatic (%@)"
         ],
         "settings_artwork_store_hint": [
-            .it: "Automatico usa la regione del Mac (ora: %@). Copertine e miniature degli artisti si cercano prima nello store di questo paese (ora: %@) e, se non si trova nulla, negli Stati Uniti. Vale per tutti gli utenti, perché le copertine in cache sono comuni.",
-            .en: "Automatic uses the Mac's region (now: %@). Artwork and artist thumbnails are searched first in this country's store (now: %@) and, if nothing is found, in the United States. It applies to all users, because cached artwork is shared."
+            .it: "Copertine e miniature degli artisti si cercano prima nello store di questo paese (ora: %@) e, se non si trova nulla, negli Stati Uniti. Vale per tutti gli utenti, perché le copertine in cache sono comuni.",
+            .en: "Artwork and artist thumbnails are searched first in this country's store (now: %@) and, if nothing is found, in the United States. It applies to all users, because cached artwork is shared."
+        ],
+        "settings_artwork_store_auto_note": [
+            .it: "Automatico usa la regione del Mac (ora: %@)",
+            .en: "Automatic uses the Mac's region (now: %@)"
+        ],
+        "settings_artwork_store_hint_us": [
+            .it: "Copertine e miniature degli artisti si cercano nello store degli Stati Uniti. Vale per tutti gli utenti, perché le copertine in cache sono comuni.",
+            .en: "Artwork and artist thumbnails are searched in the United States store. It applies to all users, because cached artwork is shared."
         ],
         "artwork_proposal_title": [
             .it: "Copertine mancanti", .en: "Missing artwork"
@@ -2383,6 +2467,10 @@ private enum L {
         "remote_phase_copy_done": [
             .it: "Copia completata: %@ MB in %d s", .en: "Copy complete: %@ MB in %d s"
         ],
+        "remote_err_connection_lost": [
+            .it: "Connessione alla libreria persa durante la copia. Controlla la rete o la VPN, verifica che il volume sia ancora collegato e riprova.",
+            .en: "Connection to the library was lost while copying. Check the network or VPN, make sure the volume is still connected, and try again."
+        ],
         "remote_err_stalled": [
             .it: "Trasferimento del file interrotto: nessun dato ricevuto da %d secondi. Controlla la connessione (VPN, rete) e riprova.",
             .en: "File transfer stopped: no data received for %d seconds. Check the connection (VPN, network) and try again."
@@ -2501,8 +2589,15 @@ private enum L {
         "error_read_only_device": [
             .it: "Dispositivo in sola lettura (non supporta la musica).", .en: "Read-only device (it does not support music)."
         ],
+        "disconnected_title": [
+            .it: "Dispositivo non più attivo", .en: "Device no longer active"
+        ],
+        "disconnected_message": [
+            .it: "Il dispositivo non è più attivo in Music Manager, ma resta collegato al Mac (il suo display può mostrare ancora la connessione USB). Per scollegarlo in sicurezza, usa prima la funzione di espulsione del dispositivo (su alcuni modelli è un pulsante sul suo display), poi togli il cavo.",
+            .en: "The device is no longer active in Music Manager, but it is still connected to the Mac (its display may still show the USB connection). To disconnect it safely, first use the device's eject function (on some models a button on its display), then unplug the cable."
+        ],
         "status_disconnected": [
-            .it: "Dispositivo scollegato", .en: "Device disconnected"
+            .it: "Dispositivo non più attivo in Music Manager", .en: "Device no longer active in Music Manager"
         ],
         "status_reading": [
             .it: "Lettura…", .en: "Reading…"

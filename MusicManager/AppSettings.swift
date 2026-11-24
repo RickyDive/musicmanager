@@ -104,6 +104,7 @@ final class AppSettings: ObservableObject {
     }
     private static let playlistTypeFilterKey = "playlist_type_filter"
     private static let customArtistFirstKey = "custom_artist_first"
+    static let runningUnitKey = "running_unit"
 
     /// Colori fissi proposti per le righe selezionate (nome del testo, esadecimale RRGGBB).
     nonisolated static let highlightSwatches: [(nameKey: String, hex: String)] = [
@@ -394,6 +395,32 @@ final class AppSettings: ObservableObject {
     }
 
     /// 2.3 Beta 2: nella Custom Playlist la riga principale mostra l'artista e la piccola titolo e album (per vedere i doppioni).
+    /// Unità di misura iniziale delle frazioni PacePro nel pannello Running Tool: dalla zona di macOS (automatica), chilometri o miglia.
+    enum RunningUnit: String, CaseIterable, Identifiable {
+        case auto, km, mi
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .auto: return t("settings_running_unit_auto")
+            case .km: return t("settings_running_unit_km")
+            case .mi: return t("settings_running_unit_mi")
+            }
+        }
+    }
+    @Published var runningUnit: RunningUnit {
+        didSet { ProfileDefaults.shared.set(runningUnit.rawValue, forKey: Self.runningUnitKey) }
+    }
+    /// «km» o «mi»: la scelta dell'utente o, in automatico, il sistema di misura di macOS (USA e Regno Unito → miglia).
+    var resolvedRunningUnit: String {
+        switch runningUnit {
+        case .km: return "km"
+        case .mi: return "mi"
+        case .auto:
+            let system = Locale.current.measurementSystem
+            return system == .us || system == .uk ? "mi" : "km"
+        }
+    }
+
     @Published var customArtistFirst: Bool {
         didSet { ProfileDefaults.shared.set(customArtistFirst, forKey: Self.customArtistFirstKey) }
     }
@@ -433,6 +460,8 @@ final class AppSettings: ObservableObject {
 
     static let maxRemoteLibraries = 5
     private static let remoteLibrariesKey = "remote_libraries"
+    /// Preset con nome del pannello Runners della Custom Playlist (JSON di `[RunnerPreset]`), per utente.
+    nonisolated static let runnerPresetsKey = "runner_presets"
 
     /// Vero mentre `reloadForProfile()` sostituisce le impostazioni con quelle di un altro utente: l'elenco delle librerie cambia
     /// perché cambia utente, non perché una libreria sia stata tolta, e le copie salvate non vanno cancellate.
@@ -660,6 +689,7 @@ final class AppSettings: ObservableObject {
         proposeSharedArtworkSearch = d.proposeSharedArtworkSearch ?? true
         playlistTypeFilter = PlaylistTypeFilter(rawValue: ProfileDefaults.shared.string(forKey: Self.playlistTypeFilterKey) ?? "") ?? .all
         customArtistFirst = ProfileDefaults.shared.object(forKey: Self.customArtistFirstKey) as? Bool ?? false
+        runningUnit = RunningUnit(rawValue: ProfileDefaults.shared.string(forKey: Self.runningUnitKey) ?? "") ?? .auto
         albumOrder = AlbumOrder(rawValue: ProfileDefaults.shared.string(forKey: Self.albumOrderKey) ?? "") ?? .alphabetical
         showOnlyTransferable = ProfileDefaults.shared.object(forKey: Self.showOnlyTransferableKey) as? Bool ?? true
         checkDeviceUpdates = ProfileDefaults.shared.object(forKey: Self.checkDeviceUpdatesKey) as? Bool ?? false
@@ -699,10 +729,10 @@ final class AppSettings: ObservableObject {
     /// Chiavi dell'utente attivo (le stesse che `ProfileDefaults` prefigge): servono a cancellarle con l'utente.
     /// `libraryReadThreadsKey` resta globale (la legge anche `MusicLibraryService`).
     static let perUserKeys: [String] = [
-        albumOrderKey, playlistTypeFilterKey, customArtistFirstKey, showOnlyTransferableKey, checkDeviceUpdatesKey,
+        albumOrderKey, playlistTypeFilterKey, customArtistFirstKey, runningUnitKey, showOnlyTransferableKey, checkDeviceUpdatesKey,
         showDeviceFileManagerKey, manageMusicOnVolumesKey, interfaceFollowsSelectionKey, detailedLogKey, airPlayAsAudioKey,
         confirmMusicChangesKey, mountRemoteAtLaunchKey, listTextSizeKey, knownDevicesKey, driveLibrariesKey,
-        remoteLibrariesKey, generalKey
+        remoteLibrariesKey, generalKey, runnerPresetsKey
     ]
 
     /// Dispositivi memorizzati da un altro utente (per riconoscere un Garmin che appartiene a lui).
@@ -720,6 +750,7 @@ final class AppSettings: ObservableObject {
         apply(Self.loadGeneralProfile())
         playlistTypeFilter = PlaylistTypeFilter(rawValue: d.string(forKey: Self.playlistTypeFilterKey) ?? "") ?? .all
         customArtistFirst = d.object(forKey: Self.customArtistFirstKey) as? Bool ?? false
+        runningUnit = RunningUnit(rawValue: d.string(forKey: Self.runningUnitKey) ?? "") ?? .auto
         albumOrder = AlbumOrder(rawValue: d.string(forKey: Self.albumOrderKey) ?? "") ?? .alphabetical
         showOnlyTransferable = d.object(forKey: Self.showOnlyTransferableKey) as? Bool ?? true
         checkDeviceUpdates = d.object(forKey: Self.checkDeviceUpdatesKey) as? Bool ?? false
@@ -785,6 +816,7 @@ final class AppSettings: ObservableObject {
         }
         rewrite(\.playlistTypeFilter)
         rewrite(\.customArtistFirst)
+        rewrite(\.runningUnit)
         rewrite(\.albumOrder)
         rewrite(\.showOnlyTransferable)
         rewrite(\.checkDeviceUpdates)
@@ -835,6 +867,7 @@ final class AppSettings: ObservableObject {
         ProfileDefaults.shared.removeObject(forKey: Self.generalKey)
         playlistTypeFilter = .all
         customArtistFirst = false
+        runningUnit = .auto
         albumOrder = .alphabetical
         showOnlyTransferable = true
         checkDeviceUpdates = false

@@ -371,7 +371,20 @@ struct ContentView: View {
         // Svuota Custom Playlist, import di una playlist del dispositivo e nickname: pannelli di vetro (vedi `SimpleGlassPanels`).
         .modifier(SimpleGlassPanels(vm: vm, showImagePicker: $showImagePicker, showMaps: $showMapsSheet, showDeviceFiles: $showDeviceFiles))
         // Le mappe sul dispositivo sono cambiate rispetto a Maps.json (es. installate con Garmin Express).
-        .alert(t("alert_maps_changed_title"), isPresented: $vm.mapsChangedProposal) {
+        // 2.5.1: software del dispositivo aggiornato fuori da Music Manager (X → Y).
+        .alert(t("alert_installed_update_title"), isPresented: Binding(
+            get: { vm.installedUpdateNotice != nil },
+            set: { if !$0 { vm.installedUpdateNotice = nil } }
+        )) {
+            Button(t("button_ok"), role: .cancel) {}
+        } message: {
+            Text(t("alert_installed_update_message", vm.installedUpdateNotice?.name ?? "", vm.installedUpdateNotice?.from ?? "", vm.installedUpdateNotice?.to ?? ""))
+        }
+        // Se in contemporanea c'è anche l'avviso delle mappe, compare dopo quello del software.
+        .alert(t("alert_maps_changed_title"), isPresented: Binding(
+            get: { vm.mapsChangedProposal && vm.installedUpdateNotice == nil },
+            set: { if !$0 && vm.installedUpdateNotice == nil { vm.mapsChangedProposal = false } }
+        )) {
             Button(t("button_check_now")) { vm.acceptMapsRecheck() }
             Button(t("button_later"), role: .cancel) {}
         } message: {
@@ -1038,7 +1051,8 @@ struct ContentView: View {
     /// si rivedono qui (file UpdateNotes.json del dispositivo).
     private func upToDateTooltip(version: String?, deviceID: String?) -> String {
         let base = t("tooltip_software_updated")
-        guard let version, let deviceID, let notes = DeviceXMLStore.updateNotes(version: version, forDevice: deviceID) else { return base }
+        guard let version, let deviceID else { return base }
+        guard let notes = DeviceXMLStore.updateNotes(version: version, forDevice: deviceID) else { return base + "\n\n" + t("update_notes_none", version) }
         return base + "\n\n" + t("tooltip_installed_whats_new", version) + "\n" + notes
     }
 
@@ -1062,14 +1076,15 @@ struct ContentView: View {
     /// campo parte sempre dalla stessa posizione, qualunque sia la lunghezza del numero di serie.
     private func serialProductLine(_ serial: String?, _ product: String?) -> some View {
         HStack(spacing: 0) {
-            infoLine("Serial Number", serial, copyable: true).frame(width: 170, alignment: .leading)
-            infoLine("Product Number", product, copyable: true)
+            infoLine("Serial Number", serial, copyable: true).frame(width: 148, alignment: .leading)   // 148 pt (prima 170): spazio per «Cod. Prodotto» e il codice per intero
+            infoLine(t("label_product_code"), product, copyable: true)
         }
     }
 
     private func infoLine(_ label: String, _ value: String?, copyable: Bool = false) -> some View {
         HStack(spacing: 6) {
-            Text(label + ":").foregroundStyle(StorageBarView.textColor)
+            // L'etichetta non va mai a capo («Product / Number:» con la finestra stretta): è il valore a ridursi, con i puntini.
+            Text(label + ":").foregroundStyle(StorageBarView.textColor).lineLimit(1).fixedSize()
             if copyable, let value, !value.isEmpty {
                 // Come in Settings > Avanzate: click destro con la sola voce «Copia», che copia il valore negli appunti.
                 Text(value).lineLimit(1).truncationMode(.middle).textSelection(.disabled)
@@ -1860,21 +1875,86 @@ struct ClearPlaylistConfirmView: View {
 }
 
 
-/// Richiesta del nickname per un dispositivo collegato per la prima volta: OK conferma, Skip lascia il nome del dispositivo
-/// (il nickname si può impostare poi in Impostazioni → Avanzate → Devices).
+/// Dispositivo collegato per la prima volta (2.5.1): nickname e scheda riassuntiva nello stile del pannello Device (modello, software,
+/// mappe, seriale, memoria). OK conferma, Skip lascia il nome del dispositivo (il nickname si può impostare poi in Impostazioni → Avanzate
+/// → Devices). Se «Controlla aggiornamenti» è spento, qui l'app spiega l'opzione e chiede il consenso: senza, nessuna richiesta a Garmin.
+/// La scheda si aggiorna da sola quando arrivano i dati (seriale, esito del controllo, mappe).
 struct DeviceNicknamePromptView: View {
     let model: String
+    @ObservedObject var vm: AppViewModel
+    @ObservedObject var settings: AppSettings
     let onConfirm: (String) -> Void
     let onSkip: () -> Void
     @State private var nickname = ""
 
     private var trimmed: String { nickname.trimmingCharacters(in: .whitespaces) }
 
+    /// Memoria interna: capacità e spazio libero (stessa scelta del pannello Device).
+    private var storageText: String? {
+        guard let storages = vm.device?.storages, !storages.isEmpty else { return nil }
+        let s = storages.count == 1 ? storages.first
+            : (storages.first(where: { $0.name.localizedCaseInsensitiveContains("intern") }) ?? storages.first)
+        guard let s, s.capacity > 0 else { return nil }
+        let cap = ByteCountFormatter.string(fromByteCount: Int64(s.capacity), countStyle: .file)
+        let free = ByteCountFormatter.string(fromByteCount: Int64(s.free), countStyle: .file)
+        return t("first_connection_storage", cap, free)
+    }
+
+    private func line(_ label: String, _ value: String?) -> some View {
+        HStack(spacing: 6) {
+            Text(label + ":").foregroundStyle(StorageBarView.textColor)
+            Text(value ?? "—").lineLimit(1).truncationMode(.middle).textSelection(.disabled)
+        }
+    }
+
+    private var infoBlock: some View {
+        let version = AppViewModel.formattedSoftwareVersion(vm.deviceXMLInfo?.softwareVersion)
+        var newVersion: String?
+        if settings.checkDeviceUpdates, case let .available(v, _)? = vm.softwareUpdateStatus { newVersion = v }
+        let mapsToUpdate = settings.checkDeviceUpdates && (vm.deviceMaps?.hasUpdates == true)
+        return VStack(alignment: .leading, spacing: 3) {
+            line("Model", vm.deviceModelText ?? model)
+            HStack(spacing: 6) {
+                Text("Software Version:").foregroundStyle(StorageBarView.textColor)
+                Text(version ?? "—")
+                // Stesse capsule del pannello Device (colori e testi): «Upgrade Available: x» rosso pallido, «Software Updated» verde pallido.
+                if let newVersion {
+                    UpdateCapsuleView(text: "Upgrade Available: \(newVersion)", color: UpdateCapsuleView.available)
+                        .help(t("tooltip_update_available", newVersion))
+                } else if settings.checkDeviceUpdates, vm.softwareUpdateStatus == .upToDate {
+                    UpdateCapsuleView(text: "Software Updated", color: UpdateCapsuleView.upToDate)
+                        .help(t("tooltip_software_updated"))
+                }
+            }
+            if mapsToUpdate {
+                Text(t("first_connection_maps_update")).bold()
+                    .foregroundStyle(Color(red: 0.74, green: 0.24, blue: 0.24))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let serial = vm.deviceSerial, !serial.isEmpty { line("Serial Number", serial) }
+            if let product = vm.deviceProductNumber, !product.isEmpty { line(t("label_product_code"), product) }
+            if let storageText { line("Storage", storageText) }
+        }
+        .font(.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     var body: some View {
         VStack(spacing: 14) {
-            Image(systemName: "watch.analog")
-                .font(.system(size: 34))
-                .foregroundStyle(.blue)
+            // Immagine del prodotto appena letta (arriva da Garmin dopo il collegamento): finché non è pronta, l'icona predefinita.
+            // Altezza fissa (96 pt) per entrambi: quando arriva l'immagine la finestra non cambia dimensione.
+            Group {
+                if let image = vm.deviceImage {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    Image(systemName: "watch.analog")
+                        .font(.system(size: 54))
+                        .foregroundStyle(.blue)
+                }
+            }
+            .frame(height: 96)
             Text(t("nickname_prompt_title"))
                 .font(.headline)
             Text(t("nickname_prompt_message", model))
@@ -1886,6 +1966,24 @@ struct DeviceNicknamePromptView: View {
             TextField(t("nickname_prompt_placeholder"), text: $nickname)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { if !trimmed.isEmpty { onConfirm(trimmed) } }
+            Divider()
+            infoBlock
+            Text(t("first_connection_no_install"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Divider()
+            // Consenso (stile macOS): l'interruttore è lo stesso di Impostazioni, quindi si può rivedere o revocare là.
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(t("settings_check_device_updates"), isOn: $settings.checkDeviceUpdates)
+                    .toggleStyle(.checkbox)
+                Text(t("first_connection_consent"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             HStack {
                 Spacer()
                 Button("Skip") { onSkip() }
@@ -1894,6 +1992,63 @@ struct DeviceNicknamePromptView: View {
                     .buttonStyle(.flatProminentRoomy)
                     .keyboardShortcut(.defaultAction)
                     .disabled(trimmed.isEmpty)
+            }
+        }
+        .padding(22)
+        .frame(width: 420)
+        // Consenso dato qui: parte subito il controllo e la scheda si riempie (non serve riconnettere).
+        .onChange(of: settings.checkDeviceUpdates) { _, on in
+            if on { Task { await vm.recheckDeviceUpdates() } }
+        }
+    }
+}
+
+/// Dopo «Skip» nella finestra del nuovo dispositivo: nessun nickname, ma il dispositivo è registrato.
+struct DeviceNicknameSkippedView: View {
+    let model: String
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text(t("nickname_skipped_title"))
+                .font(.headline)
+            Text(t("nickname_skipped_message", model))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack {
+                Spacer()
+                Button("OK") { onClose() }
+                    .buttonStyle(.flatProminentRoomy)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(width: 380)
+    }
+}
+
+/// Dopo il pulsante «Disconnetti»: la sessione con Music Manager è chiusa, ma il cavo resta inserito e l'orologio si vede ancora collegato.
+struct DeviceDisconnectedView: View {
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text(t("disconnected_title"))
+                .font(.headline)
+            Text(t("disconnected_message"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack {
+                Spacer()
+                Button("OK") { onClose() }
+                    .buttonStyle(.flatProminentRoomy)
+                    .keyboardShortcut(.defaultAction)
             }
         }
         .padding(22)
@@ -2081,7 +2236,7 @@ struct UpdateNotesCapsule: View {
             }
             .popover(isPresented: $showNotes, arrowEdge: .bottom) {
                 // L'elenco si legge qui, a ogni apertura, e arriva già pronto: il contenuto del popover non dipende dallo stato della capsula.
-                UpdateNotesPopover(title: title, notes: notes, older: loadOlder())
+                UpdateNotesPopover(title: title, notes: notes, older: loadOlder(), version: shownVersion)
             }
     }
 }
@@ -2091,12 +2246,14 @@ private struct UpdateNotesPopover: View {
     let title: String
     let notes: String?
     let older: [DeviceXMLStore.StoredUpdateNote]
+    let version: String?
     @State private var showMore: Bool
 
-    init(title: String, notes: String?, older: [DeviceXMLStore.StoredUpdateNote]) {
+    init(title: String, notes: String?, older: [DeviceXMLStore.StoredUpdateNote], version: String? = nil) {
         self.title = title
         self.notes = notes
         self.older = older
+        self.version = version
         // Senza novità per la versione mostrata l'elenco parte già aperto.
         _showMore = State(initialValue: (notes ?? "").isEmpty)
     }
@@ -2125,6 +2282,9 @@ private struct UpdateNotesPopover: View {
                 VStack(alignment: .leading, spacing: 10) {
                     if let notes, !notes.isEmpty {
                         Text(notes).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    } else if let version {
+                        // 2.5.1: Garmin non ha (ancora) pubblicato le novità di questa versione: lo diciamo invece di lasciare il titolo senza testo.
+                        Text(t("update_notes_none", version)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                     }
                     if showMore {
                         ForEach(older, id: \.version) { n in
@@ -2204,6 +2364,13 @@ private struct DeviceUpdateSheet: View {
                 }
             }
             .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+            // Solo con un firmware da aggiornare (l'informazione principale): una riga generica sulle mappe, senza elenco.
+            if hasAvailable, rows.contains(where: { $0.mapsToUpdate }) {
+                // Rosso e in grassetto, come la capsula «Upgrade Available» (stesso rosso della capsula).
+                Text(t("first_connection_maps_update")).font(.caption.bold())
+                    .foregroundStyle(Color(red: 0.74, green: 0.24, blue: 0.24))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text(t("alert_device_update_footer")).font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
@@ -3394,6 +3561,9 @@ private struct SimpleGlassPanels: ViewModifier {
             .onChange(of: vm.nicknamePromptDeviceID != nil) { _, on in
                 if on { onNextRunLoop { presentNickname() } }
             }
+            .onChange(of: vm.disconnectedNotice) { _, on in
+                if on { onNextRunLoop { presentDisconnected() } }
+            }
             .onChange(of: showImagePicker) { _, on in
                 if on { onNextRunLoop { presentImagePicker() } }
             }
@@ -3537,17 +3707,32 @@ private struct SimpleGlassPanels: ViewModifier {
         showMaps = false
     }
 
+    /// Dopo «Disconnetti»: il dispositivo non è più attivo in Music Manager ma resta collegato al Mac.
+    private func presentDisconnected() {
+        guard vm.disconnectedNotice else { return }
+        GlassModalPresenter.run { close in
+            DeviceDisconnectedView(onClose: { close() })
+        }
+        vm.disconnectedNotice = false
+    }
+
     /// Dispositivo nuovo: si propone un nickname.
     private func presentNickname() {
         guard vm.nicknamePromptDeviceID != nil else { return }
         let model = vm.deviceModelText ?? vm.device?.friendlyName ?? t("device_default_name")
         var nickname: String?
         GlassModalPresenter.run { close in
-            DeviceNicknamePromptView(model: model,
+            DeviceNicknamePromptView(model: model, vm: vm, settings: AppSettings.shared,
                                      onConfirm: { nickname = $0; close() },
                                      onSkip: { close() })
         }
-        if let nickname { vm.confirmDeviceNickname(nickname) } else { vm.nicknamePromptDeviceID = nil }
+        if let nickname { vm.confirmDeviceNickname(nickname) } else {
+            vm.nicknamePromptDeviceID = nil
+            // Skip: il dispositivo è comunque registrato (con il suo nome); un breve avviso lo dice e indica dove dare il nickname.
+            GlassModalPresenter.run { close in
+                DeviceNicknameSkippedView(model: model, onClose: { close() })
+            }
+        }
     }
 }
 

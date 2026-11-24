@@ -863,8 +863,11 @@ final class RemoteLibraryManager: ObservableObject {
         case missingFile(String)
         case noMediaFolder
         case stalled(Int)
+        /// Errore di lettura dal volume di rete durante la copia (di solito: connessione o VPN caduta, volume smontato).
+        case connectionLost
         var errorDescription: String? {
             switch self {
+            case .connectionLost: return t("remote_err_connection_lost")
             case .stalled(let s): return t("remote_err_stalled", s)
             case .missingFile(let p): return t("remote_err_missing_file", p)
             case .noMediaFolder: return t("external_cancelled")
@@ -902,7 +905,17 @@ final class RemoteLibraryManager: ObservableObject {
                     var slowestRead = 0.0, slowestPublish = 0.0, longestGap = 0.0
                     while !state.isCancelled {
                         let readStart = Date()
-                        let chunk = try input.read(upToCount: 512 * 1024) ?? Data()
+                        let chunk: Data
+                        do {
+                            chunk = try input.read(upToCount: 512 * 1024) ?? Data()
+                        } catch {
+                            // Lettura fallita a metà (rete o VPN persa, volume smontato): messaggio chiaro per l'utente e, nel registro,
+                            // dominio e codice dell'errore (anche quello sottostante) per capire la causa.
+                            let ns = error as NSError
+                            let under = (ns.userInfo[NSUnderlyingErrorKey] as? NSError).map { "\($0.domain) \($0.code)" } ?? "nessuno"
+                            AppLog.debug("[rete] Libreria remota: lettura interrotta dopo \(String(format: "%.1f", Double(done) / 1_000_000)) MB in \(String(format: "%.1f", Date().timeIntervalSince(started))) s — errore \(ns.domain) \(ns.code), sottostante: \(under), \(ns.localizedDescription)")
+                            throw ManagerError.connectionLost
+                        }
                         slowestRead = max(slowestRead, Date().timeIntervalSince(readStart))
                         reads += 1
                         if chunk.isEmpty { break }

@@ -46,6 +46,9 @@ final class PlayerService: NSObject, ObservableObject {
     static let previewStartFraction = 0.30
     static let previewLength: TimeInterval = 15
     private var previewEnd: TimeInterval?
+    /// Scorrimento manuale: una sola richiesta di posizione alla volta verso AVPlayer; durante lo scatto si tiene solo l'ultima.
+    private var seekInProgress = false
+    private var pendingSeek: CMTime?
     private var previewApplied = false
     /// Spegnendo l'anteprima mentre un brano suona, quel brano prosegue fino alla fine.
     func cancelPreview() { previewEnd = nil }
@@ -59,6 +62,8 @@ final class PlayerService: NSObject, ObservableObject {
     private var nowArtist: String?
     private var nowAlbum: String?
     private var nowArtwork: NSImage?
+    /// Copertina «In riproduzione» già pronta: si crea una volta per brano, non a ogni ripubblicazione (a ogni scatto dello scorrimento).
+    private var nowArtworkItem: MPMediaItemArtwork?
 
     /// Volume del mini player (0...1), ricordato tra un avvio e l'altro e applicato a ogni brano.
     @Published var volume: Float = {
@@ -252,6 +257,7 @@ final class PlayerService: NSObject, ObservableObject {
                 self?.onFinished?()
             }
         }
+        seekInProgress = false; pendingSeek = nil
         routePlayer.replaceCurrentItem(with: item)
         routePlayer.play()
         currentTime = 0
@@ -303,10 +309,29 @@ final class PlayerService: NSObject, ObservableObject {
         guard currentItem != nil else { return }
         previewEnd = nil   // chi sposta il cursore a mano prende il controllo: il brano prosegue
         let clamped = duration > 0 ? min(max(0, time), duration) : max(0, time)
-        routePlayer.seek(to: CMTime(seconds: clamped, preferredTimescale: 600),
-                         toleranceBefore: .zero, toleranceAfter: .zero)
         currentTime = clamped
-        publishNowPlaying()
+        let target = CMTime(seconds: clamped, preferredTimescale: 600)
+        // 2.5.1: uno scorrimento rapido mandava decine di richieste di posizione (tolleranza zero) ad AVPlayer, che poteva
+        // andare in errore interno (FigReadScheduler, crash in un thread di CoreMedia). Ora una alla volta, con l'ultima in coda.
+        if seekInProgress { pendingSeek = target; return }
+        performSeek(to: target)
+    }
+
+    private func performSeek(to target: CMTime) {
+        seekInProgress = true
+        let gen = generation
+        routePlayer.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.generation == gen else { return }
+                self.seekInProgress = false
+                if let next = self.pendingSeek {
+                    self.pendingSeek = nil
+                    self.performSeek(to: next)
+                } else {
+                    self.publishNowPlaying()
+                }
+            }
+        }
     }
 
     func stop() {
@@ -317,6 +342,7 @@ final class PlayerService: NSObject, ObservableObject {
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = nil
         routePlayer.pause()
+        seekInProgress = false; pendingSeek = nil
         routePlayer.replaceCurrentItem(with: nil)
         currentItem = nil
         isPlaying = false
@@ -334,11 +360,19 @@ final class PlayerService: NSObject, ObservableObject {
         nowArtist = artist
         nowAlbum = album
         nowArtwork = artwork
+        nowArtworkItem = artwork.map { Self.makeNowPlayingArtwork($0) }
         publishNowPlaying()
     }
 
     /// Contenitore per portare l'immagine nel blocco (non isolato) che il sistema richiama per la copertina.
     private struct ArtworkBox: @unchecked Sendable { let image: NSImage }
+
+    /// Crea la copertina per il sistema in una funzione **non isolata**: il blocco che MediaPlayer richiama da un altro thread
+    /// non deve ereditare l'isolamento al main actor della classe (2.5.1: crash allo scorrimento del brano, thread di dispatch).
+    nonisolated private static func makeNowPlayingArtwork(_ image: NSImage) -> MPMediaItemArtwork {
+        let box = ArtworkBox(image: image)
+        return MPMediaItemArtwork(boundsSize: image.size) { _ in box.image }
+    }
 
     /// Pubblica le informazioni "In riproduzione": il sistema (e l'Apple TV, via AirPlay) mostra il brano giusto, con copertina.
     /// Posizione e velocità servono al sistema per far avanzare da solo la barra del tempo; si ripubblicano a ogni pausa/ripresa/salto.
@@ -354,10 +388,7 @@ final class PlayerService: NSObject, ObservableObject {
         if let nowArtist, !nowArtist.isEmpty { info[MPMediaItemPropertyArtist] = nowArtist }
         if let nowAlbum, !nowAlbum.isEmpty { info[MPMediaItemPropertyAlbumTitle] = nowAlbum }
         if duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = duration }
-        if let image = nowArtwork {
-            let box = ArtworkBox(image: image)
-            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in box.image }
-        }
+        if let nowArtworkItem { info[MPMediaItemPropertyArtwork] = nowArtworkItem }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
         AppLog.debug("In riproduzione: pubblicato \"\(title)\" — \(nowArtist ?? "")")

@@ -413,7 +413,15 @@ enum Diagnostics {
             lines.append("Music library: \(vm.tracks.count) tracks, \(vm.playlists.count) playlists")
             // Libreria a schermo e motivi per cui i brani non sono trasferibili (conteggi, senza dati personali).
             var shown = "local (Music)"
-            if vm.externalLibraryName != nil { shown = vm.isDriveLibraryActive ? "external (drive)" : "external (XML)" }
+            if vm.externalLibraryName != nil {
+                if vm.isDriveLibraryActive {
+                    shown = "external (drive)"
+                } else {
+                    // 2.5.1: il file di MusicManager Server si chiama library.json; l'XML di Musica ha un altro nome.
+                    let path = AppSettings.shared.remoteLibraries.first { $0.id == vm.externalLibraryID }?.path.lowercased() ?? ""
+                    shown = path.hasSuffix(".json") ? "external (Server JSON)" : "external (XML)"
+                }
+            }
             lines.append("Library shown: " + shown)
             var reasons: [String: Int] = [:]
             for track in vm.tracks { if let reason = track.blockedReason { reasons[reason, default: 0] += 1 } }

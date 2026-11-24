@@ -101,6 +101,8 @@ struct PodcastEpisode: Identifiable, Hashable, Sendable {
     /// Colori del programma scelti da Apple in base alla copertina (esadecimale senza «#»): sfondo e testo principale.
     var programBackgroundHex: String? = nil
     var programTextHex: String? = nil
+    /// Descrizione dell'episodio (testo semplice, senza HTML), da `ZMTEPISODEDESCRIPTION`.
+    var episodeDescription: String? = nil
 
     var id: String { uuid }
     var isMP3: Bool { fileURL.pathExtension.lowercased() == "mp3" }
@@ -253,9 +255,19 @@ enum ApplePodcastsLibrary {
         let pText = pc.contains("ZARTWORKTEXTPRIMARYCOLOR") ? "p.ZARTWORKTEXTPRIMARYCOLOR" : "NULL"
         let colorColumns = ["ZARTWORKPRIMARYCOLOR", "ZARTWORKTEXTPRIMARYCOLOR"].filter { pc.contains($0) }
         let pDesc = descColumn.map { "p.\($0)" } ?? "NULL"
+        // Descrizione dell'episodio: tabella a parte (`ZMTEPISODEDESCRIPTION`), collegata da `ZMTEPISODE.ZDESCRIPTIONOBJECT`.
+        // `ZTEXT` è in HTML (paragrafi al loro posto), `ZPLAINTEXT` ha i paragrafi incollati: si preferisce il primo.
+        let dc = columns(db, "ZMTEPISODEDESCRIPTION")
+        let hasEpDesc = ec.contains("ZDESCRIPTIONOBJECT") && dc.contains("Z_PK") && (dc.contains("ZTEXT") || dc.contains("ZPLAINTEXT"))
+        let epDesc: String
+        if hasEpDesc {
+            let parts = ["ZTEXT", "ZPLAINTEXT"].filter { dc.contains($0) }.map { "NULLIF(d.\($0), '')" }
+            epDesc = "COALESCE(" + parts.joined(separator: ", ") + ")"
+        } else { epDesc = "NULL" }
         let descLike = pc.filter { $0.contains("DESC") || $0.contains("SUMMARY") }.sorted()
-        let sql = "SELECT e.ZUUID, e.ZTITLE, \(author), p.ZTITLE, \(e("ZPUBDATE")), \(e("ZSEASONNUMBER")), \(e("ZEPISODENUMBER")), \(e("ZBYTESIZE")), \(epArt), \(pArt), \(pDesc), \(pBg), \(pText) "
+        let sql = "SELECT e.ZUUID, e.ZTITLE, \(author), p.ZTITLE, \(e("ZPUBDATE")), \(e("ZSEASONNUMBER")), \(e("ZEPISODENUMBER")), \(e("ZBYTESIZE")), \(epArt), \(pArt), \(pDesc), \(pBg), \(pText), \(epDesc) "
             + "FROM ZMTEPISODE e LEFT JOIN ZMTPODCAST p ON e.ZPODCAST = p.Z_PK"
+            + (hasEpDesc ? " LEFT JOIN ZMTEPISODEDESCRIPTION d ON e.ZDESCRIPTIONOBJECT = d.Z_PK" : "")
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             let msg = String(cString: sqlite3_errmsg(db))
@@ -300,7 +312,8 @@ enum ApplePodcastsLibrary {
                 programArtworkTemplate: text(9),
                 programDescription: PodcastText.plain(text(10)),
                 programBackgroundHex: text(11),
-                programTextHex: text(12)))
+                programTextHex: text(12),
+                episodeDescription: PodcastText.plain(text(13))))
         }
         return Scan(episodes: episodes, copySeconds: copySeconds,
                     querySeconds: Date().timeIntervalSince(t1), databaseEpisodes: total, meta: allMeta,
@@ -998,6 +1011,11 @@ struct PodcastPane: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(ep.title).font(.system(size: settings.listTextSize.points)).lineLimit(1)
                 Text(detail(ep, sendable: sendable)).font(.system(size: settings.listTextSize.secondaryPoints)).foregroundStyle(.secondary).lineLimit(1)
+                // Descrizione dell'episodio: testo ripulito dall'HTML (a differenza di Garmin Express, che mostra i tag), al massimo due righe.
+                if let text = ep.episodeDescription {
+                    Text(text).font(.system(size: settings.listTextSize.secondaryPoints)).foregroundStyle(.secondary).opacity(0.85)
+                        .lineLimit(2).padding(.top, 1)
+                }
             }
             Spacer(minLength: 8)
             if onDevice {
