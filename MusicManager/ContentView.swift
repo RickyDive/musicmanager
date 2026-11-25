@@ -216,7 +216,10 @@ struct ContentView: View {
         }
     }
 
-    var body: some View {
+    // 2.5.1: il corpo era una sola catena di ~45 modificatori e il compilatore della CI (Xcode più lento) non riusciva a controllarne i
+    // tipi in tempo ragionevole («unable to type-check this expression in reasonable time», riga del primo `.alert`). La catena è
+    // spezzata in quattro proprietà che si appoggiano l'una sull'altra: l'ordine dei modificatori e il comportamento non cambiano.
+    private var bodyStage1: some View {
         framedContent
         // Forza il ricalcolo dell'intera vista quando la lingua cambia dal pannello Impostazioni
         // (la lingua non è più scelta qui, ma il testo in questa finestra deve comunque aggiornarsi).
@@ -287,6 +290,10 @@ struct ContentView: View {
                                         : t("alert_append_message", p.newCount, p.playlistTitle))
             }
         }
+    }
+
+    private var bodyStage2: some View {
+        bodyStage1
         .alert(t("alert_tracks_only_title"), isPresented: $vm.showTracksOnlyFromPlaylistAlert) {
             Button(t("alert_tracks_only_send")) { Task { await vm.sendSelectedTracksToDevice(confirmedPartialPlaylist: true) } }
             Button(t("button_cancel"), role: .cancel) {}
@@ -368,6 +375,10 @@ struct ContentView: View {
         } message: {
             Text(t("alert_remote_library_message", vm.pendingRemoteNetworkLibrary?.nickname ?? ""))
         }
+    }
+
+    private var bodyStage3: some View {
+        bodyStage2
         // Svuota Custom Playlist, import di una playlist del dispositivo e nickname: pannelli di vetro (vedi `SimpleGlassPanels`).
         .modifier(SimpleGlassPanels(vm: vm, showImagePicker: $showImagePicker, showMaps: $showMapsSheet, showDeviceFiles: $showDeviceFiles))
         // Le mappe sul dispositivo sono cambiate rispetto a Maps.json (es. installate con Garmin Express).
@@ -438,6 +449,10 @@ struct ContentView: View {
         } message: {
             Text(t("alert_clear_custom_playlist_message", vm.pendingWholePlaylistSend?.playlistTitle ?? ""))
         }
+    }
+
+    private var bodyStage4: some View {
+        bodyStage3
         .onChange(of: settings.remoteLibraries) { _, libs in
             // Libreria remota attiva rimossa (o resa non usabile) dalle Impostazioni: si torna alla locale.
             if let id = vm.externalLibraryID, !vm.isDriveLibraryActive, !libs.contains(where: { $0.id == id && $0.isUsable }) {
@@ -461,6 +476,10 @@ struct ContentView: View {
             Text(t("drive_rescan_message", vm.driveRescanProposal?.library.nickname ?? "",
                    vm.driveRescanProposal?.library.deviceName ?? "", vm.driveRescanProposal?.target.name ?? ""))
         }
+    }
+
+    var body: some View {
+        bodyStage4
         // L'avanzamento delle eliminazioni è nell'anello rosso della capsula; i pulsanti restano bloccati da `isBusy`.
         // Riepilogo prima dell'invio: pannello modale di vetro (non più uno sheet). Si chiude con Invia / Annulla.
         .onChange(of: vm.exportPlan?.id) { _, id in
